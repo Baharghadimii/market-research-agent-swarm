@@ -67,73 +67,117 @@ def _rich_text(line: str) -> list:
     segments = []
     cursor = 0
     for match in _BOLD_RE.finditer(line):
-        # Plain text before the bold span
         if match.start() > cursor:
             segments.append({
                 "type": "text",
                 "text": {"content": line[cursor:match.start()]},
             })
-        # The bold span itself
         segments.append({
             "type": "text",
             "text": {"content": match.group(1)},
             "annotations": {"bold": True},
         })
         cursor = match.end()
-    # Trailing plain text
     if cursor < len(line):
         segments.append({
             "type": "text",
             "text": {"content": line[cursor:]},
         })
-    # Edge case: empty line — Notion requires at least one segment
     if not segments:
         segments.append({"type": "text", "text": {"content": line}})
     return segments
 
 
-def _block(block_type: str, line: str) -> dict:
-    """Build a Notion block of the given type with rich_text from the line."""
+def _block(block_type: str, text: str, children: list | None = None) -> dict:
+    """Build a Notion block. Optionally include nested children blocks."""
+    block_body = {"rich_text": _rich_text(text)}
+    if children:
+        block_body["children"] = children
     return {
         "object": "block",
         "type": block_type,
-        block_type: {"rich_text": _rich_text(line)},
+        block_type: block_body,
     }
 
 
-def _parse_markdown_to_blocks(content: str) -> list:
-    """Convert markdown text into Notion block objects."""
-    blocks = []
+def _indent_level(raw_line: str) -> int:
+    """Return the indentation level of a bullet line.
 
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line:
+    One level = 2 spaces (the markdown convention used by most editors).
+    Tabs are normalized to 2 spaces. Returns 0 for non-indented lines.
+    """
+    expanded = raw_line.expandtabs(2)
+    stripped = expanded.lstrip(" ")
+    leading = len(expanded) - len(stripped)
+    return leading // 2
+
+
+def _parse_markdown_to_blocks(content: str) -> list:
+    """Convert markdown text into Notion block objects, preserving bullet nesting."""
+    blocks = []
+    # Stack of (indent_level, bullet_block) for currently-open bullet ancestors
+    bullet_stack: list = []
+
+    def attach_bullet(level: int, bullet: dict) -> None:
+        """Attach a bullet at the given indent level, nesting under its parent if any."""
+        # Pop any siblings/cousins at >= this level off the stack
+        while bullet_stack and bullet_stack[-1][0] >= level:
+            bullet_stack.pop()
+
+        if bullet_stack:
+            # Nest under the closest shallower bullet
+            parent = bullet_stack[-1][1]
+            parent_type = parent["type"]
+            parent[parent_type].setdefault("children", []).append(bullet)
+        else:
+            # Top-level bullet
+            blocks.append(bullet)
+
+        bullet_stack.append((level, bullet))
+
+    def reset_bullet_stack() -> None:
+        bullet_stack.clear()
+
+    for raw_line in content.split("\n"):
+        # Preserve indentation for bullets, but work with stripped line for matching
+        stripped = raw_line.strip()
+        if not stripped:
             continue
-        elif line.startswith("### "):
-            blocks.append(_block("heading_3", line[4:]))
-        elif line.startswith("## "):
-            blocks.append(_block("heading_2", line[3:]))
-        elif line.startswith("# "):
-            blocks.append(_block("heading_1", line[2:]))
-        elif line.startswith("- ") or line.startswith("* "):
-            blocks.append(_block("bulleted_list_item", line[2:]))
-        elif re.match(r"^\d+\.\s", line):
-            # Strip the leading "N. " prefix (handles multi-digit too)
-            content_after_num = re.sub(r"^\d+\.\s+", "", line)
+
+        is_bullet = stripped.startswith("- ") or stripped.startswith("* ")
+        is_numbered = bool(re.match(r"^\d+\.\s", stripped))
+
+        if stripped.startswith("### "):
+            reset_bullet_stack()
+            blocks.append(_block("heading_3", stripped[4:]))
+        elif stripped.startswith("## "):
+            reset_bullet_stack()
+            blocks.append(_block("heading_2", stripped[3:]))
+        elif stripped.startswith("# "):
+            reset_bullet_stack()
+            blocks.append(_block("heading_1", stripped[2:]))
+        elif is_bullet:
+            level = _indent_level(raw_line)
+            bullet = _block("bulleted_list_item", stripped[2:])
+            attach_bullet(level, bullet)
+        elif is_numbered:
+            reset_bullet_stack()
+            content_after_num = re.sub(r"^\d+\.\s+", "", stripped)
             blocks.append(_block("numbered_list_item", content_after_num))
-        elif line.startswith("|") and "---" in line:
-            continue  # table separator row, skip
-        elif line.startswith("|") and line.endswith("|"):
-            cells = [c.strip() for c in line.strip("|").split("|")]
+        elif stripped.startswith("|") and "---" in stripped:
+            continue
+        elif stripped.startswith("|") and stripped.endswith("|"):
+            reset_bullet_stack()
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
             clean_cells = [c for c in cells if c]
             if clean_cells:
                 blocks.append(_block("bulleted_list_item", " | ".join(clean_cells)))
         else:
-            # Plain paragraph — chunk if over the per-block limit
-            if len(line) > 1900:
-                for i in range(0, len(line), 1900):
-                    blocks.append(_block("paragraph", line[i:i+1900]))
+            reset_bullet_stack()
+            if len(stripped) > 1900:
+                for i in range(0, len(stripped), 1900):
+                    blocks.append(_block("paragraph", stripped[i:i+1900]))
             else:
-                blocks.append(_block("paragraph", line))
+                blocks.append(_block("paragraph", stripped))
 
     return blocks
