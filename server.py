@@ -1,13 +1,13 @@
 """
 server.py — Flask backend for Swarm Research UI
 
-Architecture:
-  1. Planner (Claude Sonnet) reads the user prompt and decides:
-     - what domain/angle to research
-     - which agents to run and with what brief
-  2. Executor agents run in parallel (cheap models)
-  3. Summarizer compresses each agent output (Gemini Flash)
-  4. Synthesizer (Claude Sonnet) produces the final structured JSON report
+True planner-executor architecture:
+  1. Planner (Sonnet) reads the prompt and dynamically designs the entire
+     research strategy from scratch — what sources, what queries, what signals.
+     NO hardcoded source types, platforms, or categories.
+  2. Researchers execute briefs using direct web search (no CrewAI needed).
+  3. Summarizer (Flash) compresses each researcher's output.
+  4. Synthesizer (Sonnet) produces the final structured JSON report.
 """
 
 import os
@@ -19,20 +19,22 @@ load_dotenv()
 
 from flask import Flask, request, jsonify, send_from_directory
 from openai import OpenAI
-from crewai import Agent, Task, Crew
-from config import BUDGET_MODEL, SMART_CHEAP_MODEL, INSIGHT_MODEL, load_skill
 from tools.search import serper_search
 
 app = Flask(__name__, static_folder="static")
 
-# ── OpenRouter client (for planner + summarizer direct calls) ──
+# ── OpenRouter client ──
 client = OpenAI(
     api_key=os.environ.get("OPENROUTER_API_KEY", ""),
     base_url="https://openrouter.ai/api/v1"
 )
 
-SONNET  = "anthropic/claude-sonnet-4-5"
-FLASH   = "google/gemini-2.0-flash-lite-001"
+SONNET = "anthropic/claude-sonnet-4-5"
+FLASH  = "google/gemini-2.0-flash-lite-001"
+
+# Bounded for cost predictability
+MAX_RESEARCHERS = 6
+MIN_RESEARCHERS = 3
 
 # ────────────────────────────────────────────────
 # COST TRACKING
@@ -40,7 +42,6 @@ FLASH   = "google/gemini-2.0-flash-lite-001"
 COST_PER_1M = {
     SONNET: {"input": 3.00,  "output": 15.00},
     FLASH:  {"input": 0.075, "output": 0.30},
-    "deepseek": {"input": 0.14, "output": 0.28},
 }
 
 def estimate_tokens(text: str) -> int:
@@ -55,116 +56,120 @@ def estimate_cost(model: str, input_text: str, output_text: str) -> float:
 
 # ────────────────────────────────────────────────
 # STEP 1 — PLANNER
-# Reads user prompt → decides which agents to run + what brief each gets
+# Reads prompt → designs entire research strategy from scratch.
+# No hardcoded categories, platforms, or source types.
 # ────────────────────────────────────────────────
-PLANNER_SYSTEM = """You are a research planner for a market gap analysis swarm.
+PLANNER_SYSTEM = f"""You are a master research planner for a market gap analysis swarm.
 
-Given a user's research prompt, you decide:
-1. The domain name (short, e.g. "Speech Delay Apps")
-2. Which of the 4 available agents to run (you can skip agents that aren't relevant)
-3. A focused brief for each agent you select
+Given ANY user prompt — an app, product, service, physical place, B2B tool, anything —
+you design the entire research strategy from scratch every single time.
 
-Available agents:
-- amazon_scanner: finds gaps in Amazon products — use when there are physical products or apps with reviews
-- reddit_miner: mines Reddit communities for unmet needs — always useful
-- trends_tracker: analyzes search trend lifecycle — always useful  
-- competitor_watcher: maps competitive whitespace — always useful
+Think carefully:
+1. What exactly IS this thing? (mobile app? physical product? B2B SaaS? local service?)
+2. Where do REAL users of this thing express frustration, wishes, complaints?
+   Think beyond obvious places — specific subreddits, niche forums, professional communities,
+   app store reviews, Facebook groups, specialized review sites, YouTube comments, etc.
+3. Where do competitors exist and how can we observe their weaknesses?
+4. What specific signal would prove a market gap exists here?
 
-Return ONLY valid JSON, no preamble, no markdown:
-{
-  "domain": "short domain name",
-  "agents": {
-    "amazon_scanner": "specific brief for this agent, or null to skip",
-    "reddit_miner": "specific brief for this agent, or null to skip",
-    "trends_tracker": "specific brief for this agent, or null to skip",
-    "competitor_watcher": "specific brief for this agent, or null to skip"
-  }
-}
+Produce {MIN_RESEARCHERS}-{MAX_RESEARCHERS} research briefs.
+Each brief must investigate a COMPLETELY DIFFERENT angle and source.
+No two briefs should overlap in source type or signal being sought.
 
-Keep each brief to 2-3 sentences max. Be specific to the user's domain.
-If amazon_scanner is not relevant (e.g. pure service/app domain with no physical products), set it to null."""
+Return ONLY valid JSON, no preamble, no markdown fences:
+{{
+  "domain": "Short domain name (e.g. Speech Delay Apps, Vancouver Coffee Shops, B2B Kafka Tools)",
+  "thinking": "2-3 sentences explaining WHY you chose these specific sources for this specific prompt",
+  "researchers": [
+    {{
+      "id": "unique-short-id",
+      "source": "Very specific source (e.g. r/speechdelays and r/toddlers, NOT just Reddit)",
+      "queries": ["specific query 1", "specific query 2"],
+      "looking_for": "Exact signal that indicates a gap (complaints, wishes, workarounds)",
+      "expected_output": "What kind of data to surface (quotes, product names, patterns)"
+    }}
+  ]
+}}
 
-def run_planner(prompt: str) -> dict:
-    """Ask Sonnet to plan the research strategy."""
+Examples of GOOD sources: "r/speechdelays subreddit", "App Store 1-3 star reviews of Speech Blubs",
+"BabyCenter speech delay forum threads", "SLP professional Facebook groups",
+"YouTube comments on speech therapy videos"
+
+Examples of BAD sources: "Reddit", "App stores", "Social media", "Forums"
+
+Be ruthlessly specific. The researchers can only search for what you tell them to search for."""
+
+def run_planner(prompt: str):
     response = client.chat.completions.create(
         model=SONNET,
         messages=[
             {"role": "system", "content": PLANNER_SYSTEM},
             {"role": "user",   "content": prompt}
         ],
-        max_tokens=600,
-        temperature=0.3
+        max_tokens=1500,
+        temperature=0.4
     )
     raw = response.choices[0].message.content.strip()
-    # strip markdown code fences if present
     raw = raw.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw)
+    plan = json.loads(raw)
+
+    # Enforce bounds
+    researchers = plan.get("researchers", [])[:MAX_RESEARCHERS]
+    if len(researchers) < MIN_RESEARCHERS:
+        raise ValueError(f"Planner returned only {len(researchers)} researchers (min {MIN_RESEARCHERS})")
+    plan["researchers"] = researchers
+
+    cost = estimate_cost(SONNET, PLANNER_SYSTEM + prompt, raw)
+    return plan, cost
 
 # ────────────────────────────────────────────────
-# STEP 2 — DYNAMIC AGENT RUNNER
-# Spins up only the agents the planner selected
+# STEP 2 — RESEARCHER
+# Executes one brief using direct web search calls.
+# No CrewAI, no LLM — just search and return raw results.
+# The intelligence is in the planner (what to search) and
+# synthesizer (what it means). Researchers just fetch data.
 # ────────────────────────────────────────────────
-def run_agent(agent_name: str, brief: str) -> str:
-    """Run a single research agent with a custom brief."""
+def run_researcher(brief: dict) -> str:
+    """Execute one research brief using direct search calls."""
+    all_results = []
 
-    # Pick model based on agent type
-    if agent_name in ("amazon_scanner", "trends_tracker"):
-        llm = BUDGET_MODEL
-    else:
-        llm = SMART_CHEAP_MODEL
+    for query in brief.get("queries", []):
+        try:
+            result = serper_search.run(query)
+            all_results.append(f"Query: {query}\n{result}")
+            time.sleep(1)  # small rate limit buffer between queries
+        except Exception as e:
+            all_results.append(f"Query: {query}\nSearch failed: {e}")
 
-    # Load the base skill for this agent
-    skill_map = {
-        "amazon_scanner":    "amazon-scanner",
-        "reddit_miner":      "reddit-miner",
-        "trends_tracker":    "trends-tracker",
-        "competitor_watcher":"competitor-watcher",
-    }
-    skill_name = skill_map.get(agent_name, agent_name)
-    backstory = load_skill(skill_name)
+    source = brief.get("source", "unknown source")
+    looking_for = brief.get("looking_for", "")
+    header = f"Source investigated: {source}\nLooking for: {looking_for}\n\n"
+    return header + "\n\n---\n\n".join(all_results)
 
-    agent = Agent(
-        role=agent_name.replace("_", " ").title(),
-        goal=f"Research market gaps in this specific area: {brief}",
-        backstory=backstory,
-        tools=[serper_search],
-        llm=llm,
-        verbose=False
-    )
-
-    task = Task(
-        description=(
-            f"{brief}\n\n"
-            "Return your findings as structured JSON as defined in your skill. "
-            "Be specific and concise. Focus only on what's relevant to this brief."
-        ),
-        expected_output="Structured JSON findings relevant to the brief.",
-        agent=agent
-    )
-
-    crew = Crew(agents=[agent], tasks=[task], verbose=False)
-    result = str(crew.kickoff())
-    time.sleep(10)  # rate limit buffer
-    return result
-
-def run_agents_parallel(agent_briefs: dict) -> dict:
-    """Run selected agents in parallel using threads."""
+def run_researchers_parallel(researchers: list) -> dict:
+    """Run all researcher briefs in parallel using threads."""
     results = {}
-    errors  = {}
+    lock    = threading.Lock()
     threads = []
 
-    def run_one(name, brief):
+    def run_one(brief):
+        rid = brief.get("id", f"r-{id(brief)}")
         try:
-            results[name] = run_agent(name, brief)
+            output = run_researcher(brief)
+            with lock:
+                results[rid] = {"brief": brief, "output": output}
         except Exception as e:
-            errors[name] = str(e)
-            results[name] = f"Agent failed: {e}"
+            with lock:
+                results[rid] = {
+                    "brief":  brief,
+                    "output": f"Researcher failed: {e}",
+                    "error":  str(e)
+                }
 
-    for name, brief in agent_briefs.items():
-        if brief:  # skip nulled agents
-            t = threading.Thread(target=run_one, args=(name, brief))
-            threads.append(t)
-            t.start()
+    for brief in researchers:
+        t = threading.Thread(target=run_one, args=(brief,))
+        threads.append(t)
+        t.start()
 
     for t in threads:
         t.join()
@@ -173,61 +178,89 @@ def run_agents_parallel(agent_briefs: dict) -> dict:
 
 # ────────────────────────────────────────────────
 # STEP 3 — SUMMARIZER
-# Compresses each agent's raw output before Sonnet sees it
+# Flash compresses raw search results into signal-dense summaries.
+# This is where the cheap LLM earns its keep —
+# turning walls of search snippets into 150 words of signal.
 # ────────────────────────────────────────────────
-SUMMARIZER_PROMPT = """You are a signal extractor. Compress this agent's findings into 120-150 words of plain English.
-Lead with the top 2-3 opportunities by name. Include core evidence (1 sentence per signal).
-Note any surprising findings. No JSON, no structure — plain paragraphs only.
+SUMMARIZER_PROMPT = """You compress raw web search results into 120-150 words of plain English signal.
+
+Your job:
+- Extract the strongest evidence of market gaps (complaints, wishes, workarounds)
+- Name specific products, communities, or patterns you see
+- Note if the source had thin data (be honest)
+- Surface anything surprising or contradictory
+
+No JSON, no headers, no bullets — flowing paragraphs only.
 Output only the summary. No preamble."""
 
-def summarize_one(agent_name: str, raw: str) -> str:
+def summarize_one(rid: str, raw: str, source: str):
     response = client.chat.completions.create(
         model=FLASH,
         messages=[
             {"role": "system", "content": SUMMARIZER_PROMPT},
-            {"role": "user",   "content": f"Agent: {agent_name}\n\n{raw}"}
+            {"role": "user",   "content": f"Source: {source}\n\nRaw search results:\n{raw}"}
         ],
-        max_tokens=250,
+        max_tokens=300,
         temperature=0.2
     )
-    return response.choices[0].message.content.strip()
+    summary = response.choices[0].message.content.strip()
+    cost    = estimate_cost(FLASH, raw, summary)
+    return summary, cost
 
-def summarize_all(agent_results: dict) -> dict:
-    """Summarize all agent outputs in parallel."""
-    summaries = {}
-    threads   = []
+def summarize_all(researcher_results: dict):
+    """Summarize all researcher outputs in parallel."""
+    summaries  = {}
+    total_cost = 0.0
+    threads    = []
+    lock       = threading.Lock()
 
-    def summarize_one_thread(name, raw):
-        summaries[name] = summarize_one(name, raw)
+    def summarize_thread(rid, raw, source):
+        nonlocal total_cost
+        summary, cost = summarize_one(rid, raw, source)
+        with lock:
+            summaries[rid] = summary
+            total_cost += cost
 
-    for name, raw in agent_results.items():
-        t = threading.Thread(target=summarize_one_thread, args=(name, raw))
+    for rid, data in researcher_results.items():
+        source = data["brief"].get("source", rid)
+        t = threading.Thread(
+            target=summarize_thread,
+            args=(rid, data["output"], source)
+        )
         threads.append(t)
         t.start()
 
     for t in threads:
         t.join()
 
-    return summaries
+    return summaries, total_cost
 
 # ────────────────────────────────────────────────
 # STEP 4 — SYNTHESIZER
-# Sonnet reads compressed summaries → produces structured JSON report
+# Sonnet reads all compressed summaries → final structured JSON report.
+# This is the decision-maker. It applies convergence test and makes the call.
 # ────────────────────────────────────────────────
-SYNTHESIZER_SYSTEM = """You are a market research synthesizer. You receive compressed findings from multiple research agents.
+SYNTHESIZER_SYSTEM = """You are a market research synthesizer and decision-maker.
 
-Apply the 4-source convergence test:
-- 4 sources = lead with it
-- 3 sources = strong opportunity  
-- 2 sources = worth testing cheaply
-- 1 source  = watch list only
+You receive compressed findings from multiple researchers, each investigating a different source.
+Your job is NOT to summarize — it's to MAKE THE CALL.
+
+Apply the convergence test:
+- Signal appears in most sources → lead with it, high confidence
+- Signal appears in some sources → strong opportunity, recommend pursuing
+- Signal in two sources → worth testing cheaply
+- Signal in one source only → watch list, not action item
+
+Rank opportunities by: signal convergence → tribe specificity → wedge clarity → capital efficiency → timing.
+
+Make the call. Don't hedge. If data is thin, say so plainly and recommend what to validate first.
 
 Return ONLY valid JSON, no preamble, no markdown fences:
 {
   "domain": "Research domain name",
   "the_call": {
-    "recommended_focus": "one sentence",
-    "for_whom": "specific tribe",
+    "recommended_focus": "one sentence — what to build/pursue",
+    "for_whom": "specific tribe, not broad demographic",
     "why_now": "one sentence on timing",
     "validation_step": "one concrete action this week"
   },
@@ -236,29 +269,26 @@ Return ONLY valid JSON, no preamble, no markdown fences:
       "name": "Opportunity name",
       "what": "product/angle in one sentence",
       "who": "specific tribe",
-      "signal_convergence": "X/4 sources — name them",
-      "wedge": "why this beats incumbents",
+      "signal_convergence": "X/N sources — name the sources briefly",
+      "wedge": "why this beats incumbents for this audience",
       "capital_to_validate": "Low/Medium/High — what it takes",
-      "timing": "why window is open",
+      "timing": "why this window is open",
       "risk": "most likely reason this fails",
       "validation_plan": ["step 1", "step 2", "step 3"]
     }
   ],
-  "watch_list": ["item 1", "item 2"],
-  "contradictions": ["contradiction 1", "contradiction 2"],
-  "excluded": ["what was excluded and why"]
+  "watch_list": ["brief item — why watching not acting"],
+  "contradictions": ["where sources disagreed and how you resolved it"],
+  "excluded": ["what you saw but didn't recommend and why"]
 }
 
-Make the call. Don't hedge. Max 3 opportunities."""
+Max 3 opportunities. Every word earns its place."""
 
-def run_synthesizer(domain: str, summaries: dict, prompt: str) -> dict:
-    """Sonnet synthesizes all compressed findings into final JSON report."""
-
-    # Build context block
-    context = f"User research prompt: {prompt}\nDomain: {domain}\n\n"
-    for name, summary in summaries.items():
-        label = name.replace("_", " ").title()
-        context += f"=== {label} ===\n{summary}\n\n"
+def run_synthesizer(domain: str, summaries: dict, researcher_results: dict, prompt: str):
+    context = f"User prompt: {prompt}\nDomain: {domain}\nSources investigated: {len(summaries)}\n\n"
+    for rid, summary in summaries.items():
+        source = researcher_results[rid]["brief"].get("source", rid)
+        context += f"=== {source} ===\n{summary}\n\n"
 
     response = client.chat.completions.create(
         model=SONNET,
@@ -266,13 +296,14 @@ def run_synthesizer(domain: str, summaries: dict, prompt: str) -> dict:
             {"role": "system", "content": SYNTHESIZER_SYSTEM},
             {"role": "user",   "content": context}
         ],
-        max_tokens=2000,
+        max_tokens=2500,
         temperature=0.4
     )
-
     raw = response.choices[0].message.content.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw), context
+    report = json.loads(raw)
+    cost   = estimate_cost(SONNET, SYNTHESIZER_SYSTEM + context, raw)
+    return report, cost
 
 # ────────────────────────────────────────────────
 # ROUTES
@@ -283,8 +314,8 @@ def index():
 
 @app.route("/research", methods=["POST"])
 def research():
-    data   = request.get_json()
-    prompt = (data or {}).get("prompt", "").strip()
+    body   = request.get_json()
+    prompt = (body or {}).get("prompt", "").strip()
 
     if not prompt:
         return jsonify({"error": "Prompt is required"}), 400
@@ -292,29 +323,27 @@ def research():
     total_cost = 0.0
 
     try:
-        # ── Step 1: Plan ──
-        plan = run_planner(prompt)
-        total_cost += estimate_cost(SONNET, prompt, json.dumps(plan))
+        # ── Step 1: Planner designs strategy from scratch ──
+        plan, plan_cost = run_planner(prompt)
+        total_cost += plan_cost
 
-        domain       = plan.get("domain", "Market Research")
-        agent_briefs = {k: v for k, v in plan.get("agents", {}).items() if v}
+        domain      = plan.get("domain", "Market Research")
+        researchers = plan.get("researchers", [])
 
-        if not agent_briefs:
-            return jsonify({"error": "Planner returned no agents to run"}), 500
-
-        # ── Step 2: Run agents in parallel ──
-        agent_results = run_agents_parallel(agent_briefs)
+        # ── Step 2: Researchers fetch data in parallel ──
+        researcher_results = run_researchers_parallel(researchers)
 
         # ── Step 3: Summarize in parallel ──
-        summaries = summarize_all(agent_results)
-        for name, summary in summaries.items():
-            total_cost += estimate_cost(FLASH, agent_results[name], summary)
+        summaries, sum_cost = summarize_all(researcher_results)
+        total_cost += sum_cost
 
-        # ── Step 4: Synthesize ──
-        report, synth_input = run_synthesizer(domain, summaries, prompt)
-        total_cost += estimate_cost(SONNET, synth_input, json.dumps(report))
+        # ── Step 4: Synthesizer makes the call ──
+        report, synth_cost = run_synthesizer(domain, summaries, researcher_results, prompt)
+        total_cost += synth_cost
 
-        report["cost_usd"] = round(total_cost, 4)
+        report["cost_usd"]          = round(total_cost, 4)
+        report["sources_used"]      = len(researchers)
+        report["planner_thinking"]  = plan.get("thinking", "")
         return jsonify(report)
 
     except json.JSONDecodeError as e:
@@ -324,6 +353,4 @@ def research():
 
 
 if __name__ == "__main__":
-    # Debug=False for production on VPS
-    # Use 0.0.0.0 so it's accessible from outside the VPS
     app.run(host="0.0.0.0", port=5000, debug=False)
