@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Swarm Research</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --cream:       #faf8f5;
+      --cream-dark:  #f3f0eb;
+      --cream-border:#e8e3db;
+      --ink:         #1a1814;
+      --ink-mid:     #4a453e;
+      --ink-light:   #9a9389;
+      --amber:       #c8873a;
+      --amber-light: #f5ede0;
+      --amber-glow:  rgba(200,135,58,.12);
+      --green:       #3a7c5a;
+      --green-light: #eaf2ed;
+      --rose:        #b85c5c;
+      --rose-light:  #f5eaea;
+      --blue:        #4a6fa5;
+      --blue-light:  #eaeff7;
+      --shadow-sm:   0 1px 3px rgba(26,24,20,.06);
+      --shadow-md:   0 4px 16px rgba(26,24,20,.08);
+      --shadow-lg:   0 12px 40px rgba(26,24,20,.1);
+      --radius:      12px;
+      --radius-sm:   8px;
+    }
+
+    html { font-size: 16px; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--cream);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── HEADER ── */
+    header {
+      padding: 28px 40px 24px;
+      border-bottom: 1px solid var(--cream-border);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--cream);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .logo-mark {
+      width: 36px; height: 36px;
+      background: var(--ink);
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .logo-mark svg { width: 18px; height: 18px; fill: var(--cream); }
+
+    .logo-text {
+      font-family: 'Lora', serif;
+      font-size: 1.1rem;
+      font-weight: 500;
+      color: var(--ink);
+      letter-spacing: -.01em;
+    }
+
+    .logo-sub {
+      font-size: .75rem;
+      color: var(--ink-light);
+      font-weight: 300;
+      margin-top: 1px;
+    }
+
+    /* ── MAIN LAYOUT ── */
+    main {
+      flex: 1;
+      max-width: 860px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+
+    /* ── PROMPT SECTION ── */
+    .prompt-section {
+      margin-bottom: 48px;
+    }
+
+    .prompt-label {
+      font-family: 'Lora', serif;
+      font-size: 1.6rem;
+      font-weight: 500;
+      color: var(--ink);
+      line-height: 1.3;
+      margin-bottom: 6px;
+    }
+
+    .prompt-hint {
+      font-size: .85rem;
+      color: var(--ink-light);
+      margin-bottom: 20px;
+      font-weight: 300;
+    }
+
+    .input-wrap {
+      position: relative;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      background: white;
+      border: 1.5px solid var(--cream-border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: .95rem;
+      font-weight: 400;
+      color: var(--ink);
+      resize: vertical;
+      transition: border-color .2s, box-shadow .2s;
+      outline: none;
+      line-height: 1.6;
+    }
+
+    textarea::placeholder { color: var(--ink-light); }
+
+    textarea:focus {
+      border-color: var(--amber);
+      box-shadow: 0 0 0 3px var(--amber-glow);
+    }
+
+    .example-prompts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .example-chip {
+      padding: 6px 12px;
+      background: var(--cream-dark);
+      border: 1px solid var(--cream-border);
+      border-radius: 99px;
+      font-size: .78rem;
+      color: var(--ink-mid);
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+      font-weight: 400;
+    }
+    .example-chip:hover {
+      background: var(--amber-light);
+      border-color: var(--amber);
+      color: var(--amber);
+    }
+
+    .run-btn {
+      margin-top: 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--ink);
+      color: var(--cream);
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 12px 24px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: .9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .2s, transform .1s;
+      letter-spacing: .01em;
+    }
+    .run-btn:hover { background: #2d2a25; }
+    .run-btn:active { transform: scale(.98); }
+    .run-btn:disabled { background: var(--ink-light); cursor: not-allowed; transform: none; }
+
+    .run-btn svg { width: 16px; height: 16px; fill: currentColor; }
+
+    /* ── LOADING ── */
+    .loading-state {
+      display: none;
+      margin: 40px 0;
+      padding: 32px;
+      background: white;
+      border: 1px solid var(--cream-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .loading-state.visible { display: block; }
+
+    .loading-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid var(--cream-border);
+      border-top-color: var(--amber);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-title {
+      font-family: 'Lora', serif;
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--ink);
+    }
+
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--cream-border);
+      opacity: .35;
+      transition: opacity .3s;
+    }
+    .step:last-child { border-bottom: none; }
+    .step.active { opacity: 1; }
+    .step.done { opacity: .6; }
+
+    .step-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--cream-border);
+      flex-shrink: 0;
+      transition: background .3s;
+    }
+    .step.active .step-dot { background: var(--amber); }
+    .step.done .step-dot { background: var(--green); }
+
+    .step-label {
+      font-size: .85rem;
+      color: var(--ink-mid);
+      font-weight: 400;
+    }
+    .step.active .step-label { color: var(--ink); font-weight: 500; }
+
+    .step-tag {
+      margin-left: auto;
+      font-size: .72rem;
+      color: var(--ink-light);
+      font-weight: 300;
+    }
+
+    /* ── RESULTS ── */
+    .results {
+      display: none;
+      animation: fadeUp .4s ease both;
+    }
+    .results.visible { display: block; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .results-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      gap: 16px;
+    }
+
+    .results-title {
+      font-family: 'Lora', serif;
+      font-size: 1.4rem;
+      font-weight: 500;
+      color: var(--ink);
+      line-height: 1.3;
+    }
+
+    .results-meta {
+      font-size: .8rem;
+      color: var(--ink-light);
+      margin-top: 4px;
+      font-weight: 300;
+    }
+
+    .reset-btn {
+      flex-shrink: 0;
+      padding: 8px 16px;
+      background: transparent;
+      border: 1.5px solid var(--cream-border);
+      border-radius: var(--radius-sm);
+      font-family: 'DM Sans', sans-serif;
+      font-size: .82rem;
+      color: var(--ink-mid);
+      cursor: pointer;
+      transition: border-color .2s, color .2s;
+    }
+    .reset-btn:hover { border-color: var(--ink); color: var(--ink); }
+
+    /* ── THE CALL ── */
+    .the-call {
+      background: var(--amber-light);
+      border: 1.5px solid #e8c99a;
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      margin-bottom: 28px;
+    }
+
+    .call-eyebrow {
+      font-size: .72rem;
+      font-weight: 500;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--amber);
+      margin-bottom: 10px;
+    }
+
+    .call-main {
+      font-family: 'Lora', serif;
+      font-size: 1.15rem;
+      font-weight: 500;
+      color: var(--ink);
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    .call-fields {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .call-field {
+      display: flex;
+      gap: 8px;
+      font-size: .85rem;
+    }
+    .call-field-label {
+      font-weight: 500;
+      color: var(--ink-mid);
+      flex-shrink: 0;
+      min-width: 100px;
+    }
+    .call-field-value { color: var(--ink); line-height: 1.5; }
+
+    /* ── OPPORTUNITY CARDS ── */
+    .section-label {
+      font-size: .72rem;
+      font-weight: 500;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--ink-light);
+      margin-bottom: 14px;
+      margin-top: 32px;
+    }
+
+    .cards {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card {
+      background: white;
+      border: 1.5px solid var(--cream-border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      transition: box-shadow .2s, border-color .2s;
+      animation: fadeUp .4s ease both;
+    }
+    .card:nth-child(2) { animation-delay: .06s; }
+    .card:nth-child(3) { animation-delay: .12s; }
+
+    .card:hover {
+      box-shadow: var(--shadow-md);
+      border-color: #d4cdc4;
+    }
+
+    .card-header {
+      padding: 18px 22px 14px;
+      border-bottom: 1px solid var(--cream-border);
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      cursor: pointer;
+    }
+
+    .card-rank {
+      width: 28px; height: 28px;
+      background: var(--ink);
+      color: var(--cream);
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .8rem;
+      font-weight: 500;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .card:nth-child(1) .card-rank { background: var(--amber); }
+    .card:nth-child(2) .card-rank { background: var(--ink-mid); }
+    .card:nth-child(3) .card-rank { background: var(--ink-light); }
+
+    .card-title-wrap { flex: 1; }
+
+    .card-title {
+      font-family: 'Lora', serif;
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--ink);
+      line-height: 1.35;
+      margin-bottom: 4px;
+    }
+
+    .card-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .badge {
+      padding: 3px 9px;
+      border-radius: 99px;
+      font-size: .72rem;
+      font-weight: 500;
+    }
+    .badge-green  { background: var(--green-light);  color: var(--green); }
+    .badge-amber  { background: var(--amber-light);  color: var(--amber); }
+    .badge-rose   { background: var(--rose-light);   color: var(--rose); }
+    .badge-blue   { background: var(--blue-light);   color: var(--blue); }
+
+    .card-chevron {
+      flex-shrink: 0;
+      color: var(--ink-light);
+      transition: transform .2s;
+      margin-top: 4px;
+    }
+    .card.expanded .card-chevron { transform: rotate(180deg); }
+
+    .card-body {
+      display: none;
+      padding: 20px 22px;
+    }
+    .card.expanded .card-body { display: block; }
+
+    .card-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .card-field { display: flex; flex-direction: column; gap: 4px; }
+    .card-field.full { grid-column: 1 / -1; }
+
+    .card-field-label {
+      font-size: .72rem;
+      font-weight: 500;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      color: var(--ink-light);
+    }
+
+    .card-field-value {
+      font-size: .88rem;
+      color: var(--ink);
+      line-height: 1.6;
+    }
+
+    /* validation steps */
+    .validation-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .v-step {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .v-step-num {
+      width: 20px; height: 20px;
+      background: var(--cream-dark);
+      border: 1px solid var(--cream-border);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .7rem;
+      font-weight: 500;
+      color: var(--ink-mid);
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .v-step-text {
+      font-size: .85rem;
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    /* ── LOWER SECTIONS ── */
+    .lower-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .mini-card {
+      background: white;
+      border: 1.5px solid var(--cream-border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .mini-card-title {
+      font-family: 'Lora', serif;
+      font-size: .92rem;
+      font-weight: 500;
+      color: var(--ink);
+      margin-bottom: 14px;
+    }
+
+    .mini-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .mini-item {
+      font-size: .83rem;
+      color: var(--ink-mid);
+      line-height: 1.55;
+      padding-left: 14px;
+      position: relative;
+    }
+    .mini-item::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 8px;
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--cream-border);
+    }
+
+    .mini-item strong { color: var(--ink); font-weight: 500; }
+
+    /* ── COST PILL ── */
+    .cost-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--green-light);
+      border: 1px solid #c0dece;
+      border-radius: 99px;
+      padding: 5px 12px;
+      font-size: .78rem;
+      color: var(--green);
+      font-weight: 500;
+      margin-top: 24px;
+    }
+    .cost-pill svg { width: 13px; height: 13px; fill: var(--green); }
+
+    /* ── ERROR ── */
+    .error-box {
+      display: none;
+      background: var(--rose-light);
+      border: 1.5px solid #e8bfbf;
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin: 24px 0;
+      font-size: .88rem;
+      color: var(--rose);
+      line-height: 1.6;
+    }
+    .error-box.visible { display: block; }
+
+    /* ── FOOTER ── */
+    footer {
+      text-align: center;
+      padding: 20px;
+      font-size: .75rem;
+      color: var(--ink-light);
+      border-top: 1px solid var(--cream-border);
+      font-weight: 300;
+    }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 600px) {
+      header { padding: 20px; }
+      main { padding: 32px 16px 60px; }
+      .card-fields { grid-template-columns: 1fr; }
+      .lower-grid { grid-template-columns: 1fr; }
+      .prompt-label { font-size: 1.3rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo-mark">
+    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+  </div>
+  <div>
+    <div class="logo-text">Swarm Research</div>
+    <div class="logo-sub">AI-powered market gap finder</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- PROMPT -->
+  <section class="prompt-section">
+    <div class="prompt-label">What market gap are you researching?</div>
+    <div class="prompt-hint">Describe the space you want to explore — the swarm will figure out where to look.</div>
+    <div class="input-wrap">
+      <textarea id="prompt" placeholder="e.g. I'm looking for gaps in apps focusing on babies or toddlers with speech delays…" rows="4"></textarea>
+    </div>
+    <div class="example-prompts">
+      <span class="example-chip" onclick="fillPrompt(this)">Speech delay apps for toddlers</span>
+      <span class="example-chip" onclick="fillPrompt(this)">IVF companion apps — what's missing</span>
+      <span class="example-chip" onclick="fillPrompt(this)">Bilingual parenting tools for immigrant families</span>
+      <span class="example-chip" onclick="fillPrompt(this)">Baby sleep products gap in Canadian market</span>
+    </div>
+    <button class="run-btn" id="runBtn" onclick="runResearch()">
+      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      Run Research
+    </button>
+  </section>
+
+  <!-- LOADING -->
+  <div class="loading-state" id="loading">
+    <div class="loading-header">
+      <div class="spinner"></div>
+      <div class="loading-title">Swarm is working…</div>
+    </div>
+    <div class="steps">
+      <div class="step" id="step-plan">
+        <div class="step-dot"></div>
+        <div class="step-label">Planning research strategy</div>
+        <div class="step-tag">Sonnet</div>
+      </div>
+      <div class="step" id="step-agents">
+        <div class="step-dot"></div>
+        <div class="step-label">Spinning up research agents</div>
+        <div class="step-tag">Gemini Flash · DeepSeek</div>
+      </div>
+      <div class="step" id="step-summarize">
+        <div class="step-dot"></div>
+        <div class="step-label">Compressing findings</div>
+        <div class="step-tag">Gemini Flash</div>
+      </div>
+      <div class="step" id="step-synthesize">
+        <div class="step-dot"></div>
+        <div class="step-label">Synthesizing final report</div>
+        <div class="step-tag">Sonnet</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ERROR -->
+  <div class="error-box" id="errorBox"></div>
+
+  <!-- RESULTS -->
+  <div class="results" id="results">
+    <div class="results-header">
+      <div>
+        <div class="results-title" id="resultsTitle">Research Complete</div>
+        <div class="results-meta" id="resultsMeta"></div>
+      </div>
+      <button class="reset-btn" onclick="resetUI()">← New research</button>
+    </div>
+
+    <!-- THE CALL -->
+    <div class="the-call" id="theCall">
+      <div class="call-eyebrow">⚡ The Call</div>
+      <div class="call-main" id="callMain"></div>
+      <div class="call-fields" id="callFields"></div>
+    </div>
+
+    <!-- OPPORTUNITIES -->
+    <div class="section-label">Top Opportunities</div>
+    <div class="cards" id="cards"></div>
+
+    <!-- LOWER GRID -->
+    <div class="lower-grid">
+      <div class="mini-card">
+        <div class="mini-card-title">👀 Watch List</div>
+        <div class="mini-list" id="watchList"></div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-card-title">⚡ Contradictions</div>
+        <div class="mini-list" id="contradictions"></div>
+      </div>
+    </div>
+
+    <div class="cost-pill" id="costPill">
+      <svg viewBox="0 0 24 24"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>
+      <span id="costText">Calculating cost…</span>
+    </div>
+  </div>
+
+</main>
+
+<footer>Built by Bahar · Powered by Claude Sonnet, Gemini Flash, DeepSeek</footer>
+
+<script>
+  // ── EXAMPLE CHIPS ──
+  function fillPrompt(el) {
+    document.getElementById('prompt').value = el.textContent;
+    document.getElementById('prompt').focus();
+  }
+
+  // ── STEP ANIMATOR ──
+  const STEPS = ['step-plan','step-agents','step-summarize','step-synthesize'];
+  let stepTimer = null;
+
+  function animateSteps() {
+    let i = 0;
+    // reset
+    STEPS.forEach(id => {
+      const el = document.getElementById(id);
+      el.classList.remove('active','done');
+    });
+
+    function next() {
+      if (i > 0) {
+        document.getElementById(STEPS[i-1]).classList.remove('active');
+        document.getElementById(STEPS[i-1]).classList.add('done');
+      }
+      if (i < STEPS.length) {
+        document.getElementById(STEPS[i]).classList.add('active');
+        i++;
+        stepTimer = setTimeout(next, 18000); // ~18s per step
+      }
+    }
+    next();
+  }
+
+  function completeSteps() {
+    clearTimeout(stepTimer);
+    STEPS.forEach(id => {
+      const el = document.getElementById(id);
+      el.classList.remove('active');
+      el.classList.add('done');
+    });
+  }
+
+  // ── BADGE HELPERS ──
+  function capitalBadge(capital) {
+    const c = (capital || '').toLowerCase();
+    if (c.includes('low'))    return '<span class="badge badge-green">Low capital</span>';
+    if (c.includes('medium')) return '<span class="badge badge-amber">Medium capital</span>';
+    if (c.includes('high'))   return '<span class="badge badge-rose">High capital</span>';
+    return '';
+  }
+
+  function convergenceBadge(convergence) {
+    if (!convergence) return '';
+    const match = convergence.match(/(\d)/);
+    const n = match ? parseInt(match[1]) : 0;
+    const cls = n >= 4 ? 'badge-green' : n === 3 ? 'badge-amber' : 'badge-blue';
+    return `<span class="badge ${cls}">${n}/4 sources</span>`;
+  }
+
+  // ── RENDER RESULTS ──
+  function renderResults(data, prompt, elapsed) {
+    // Title
+    document.getElementById('resultsTitle').textContent =
+      data.domain || 'Research Complete';
+    document.getElementById('resultsMeta').textContent =
+      `"${prompt.substring(0,80)}${prompt.length>80?'…':''}" · ${elapsed}s`;
+
+    // The Call
+    const call = data.the_call || {};
+    document.getElementById('callMain').textContent =
+      call.recommended_focus || 'See opportunities below.';
+
+    const callFieldsEl = document.getElementById('callFields');
+    callFieldsEl.innerHTML = '';
+    if (call.for_whom) callFieldsEl.innerHTML +=
+      `<div class="call-field"><span class="call-field-label">For</span><span class="call-field-value">${call.for_whom}</span></div>`;
+    if (call.why_now) callFieldsEl.innerHTML +=
+      `<div class="call-field"><span class="call-field-label">Why now</span><span class="call-field-value">${call.why_now}</span></div>`;
+    if (call.validation_step) callFieldsEl.innerHTML +=
+      `<div class="call-field"><span class="call-field-label">This week</span><span class="call-field-value">${call.validation_step}</span></div>`;
+
+    // Cards
+    const cardsEl = document.getElementById('cards');
+    cardsEl.innerHTML = '';
+    (data.opportunities || []).forEach((opp, idx) => {
+      const steps = (opp.validation_plan || []).map((s,i) =>
+        `<div class="v-step">
+          <div class="v-step-num">${i+1}</div>
+          <div class="v-step-text">${s}</div>
+        </div>`
+      ).join('');
+
+      cardsEl.innerHTML += `
+        <div class="card" id="card-${idx}">
+          <div class="card-header" onclick="toggleCard(${idx})">
+            <div class="card-rank">${idx+1}</div>
+            <div class="card-title-wrap">
+              <div class="card-title">${opp.name || 'Opportunity'}</div>
+              <div class="card-badges">
+                ${convergenceBadge(opp.signal_convergence)}
+                ${capitalBadge(opp.capital_to_validate)}
+                ${opp.timing ? '<span class="badge badge-blue">Timed</span>' : ''}
+              </div>
+            </div>
+            <svg class="card-chevron" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M7 10l5 5 5-5z"/>
+            </svg>
+          </div>
+          <div class="card-body">
+            <div class="card-fields">
+              <div class="card-field full">
+                <div class="card-field-label">What</div>
+                <div class="card-field-value">${opp.what || ''}</div>
+              </div>
+              <div class="card-field">
+                <div class="card-field-label">Who</div>
+                <div class="card-field-value">${opp.who || ''}</div>
+              </div>
+              <div class="card-field">
+                <div class="card-field-label">Signal convergence</div>
+                <div class="card-field-value">${opp.signal_convergence || ''}</div>
+              </div>
+              <div class="card-field full">
+                <div class="card-field-label">Wedge</div>
+                <div class="card-field-value">${opp.wedge || ''}</div>
+              </div>
+              <div class="card-field">
+                <div class="card-field-label">Capital to validate</div>
+                <div class="card-field-value">${opp.capital_to_validate || ''}</div>
+              </div>
+              <div class="card-field">
+                <div class="card-field-label">Risk</div>
+                <div class="card-field-value">${opp.risk || ''}</div>
+              </div>
+              <div class="card-field full">
+                <div class="card-field-label">Timing</div>
+                <div class="card-field-value">${opp.timing || ''}</div>
+              </div>
+              ${steps ? `
+              <div class="card-field full">
+                <div class="card-field-label">Validation Plan</div>
+                <div class="validation-steps">${steps}</div>
+              </div>` : ''}
+            </div>
+          </div>
+        </div>`;
+    });
+
+    // Expand first card by default
+    if ((data.opportunities||[]).length > 0) {
+      document.getElementById('card-0').classList.add('expanded');
+    }
+
+    // Watch list
+    const watchEl = document.getElementById('watchList');
+    watchEl.innerHTML = (data.watch_list || []).map(item =>
+      `<div class="mini-item">${item}</div>`
+    ).join('') || '<div class="mini-item">Nothing flagged this run.</div>';
+
+    // Contradictions
+    const contrEl = document.getElementById('contradictions');
+    contrEl.innerHTML = (data.contradictions || []).map(item =>
+      `<div class="mini-item">${item}</div>`
+    ).join('') || '<div class="mini-item">No major contradictions found.</div>';
+
+    // Cost
+    if (data.cost_usd !== undefined) {
+      document.getElementById('costText').textContent =
+        `This run cost $${data.cost_usd.toFixed(4)} USD`;
+    } else {
+      document.getElementById('costPill').style.display = 'none';
+    }
+  }
+
+  // ── TOGGLE CARD ──
+  function toggleCard(idx) {
+    document.getElementById(`card-${idx}`).classList.toggle('expanded');
+  }
+
+  // ── RESET ──
+  function resetUI() {
+    document.getElementById('results').classList.remove('visible');
+    document.getElementById('loading').classList.remove('visible');
+    document.getElementById('errorBox').classList.remove('visible');
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('prompt').value = '';
+    document.getElementById('prompt').focus();
+  }
+
+  // ── MAIN RUN ──
+  async function runResearch() {
+    const prompt = document.getElementById('prompt').value.trim();
+    if (!prompt) {
+      document.getElementById('prompt').focus();
+      return;
+    }
+
+    // UI state
+    document.getElementById('runBtn').disabled = true;
+    document.getElementById('results').classList.remove('visible');
+    document.getElementById('errorBox').classList.remove('visible');
+    document.getElementById('loading').classList.add('visible');
+    animateSteps();
+
+    const start = Date.now();
+
+    try {
+      const res = await fetch('/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Server error' }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      const elapsed = ((Date.now() - start) / 1000).toFixed(0);
+
+      completeSteps();
+      document.getElementById('loading').classList.remove('visible');
+      document.getElementById('results').classList.add('visible');
+      renderResults(data, prompt, elapsed);
+
+    } catch (err) {
+      completeSteps();
+      document.getElementById('loading').classList.remove('visible');
+      document.getElementById('runBtn').disabled = false;
+      const box = document.getElementById('errorBox');
+      box.textContent = `Something went wrong: ${err.message}`;
+      box.classList.add('visible');
+    }
+  }
+
+  // Allow Cmd+Enter / Ctrl+Enter to submit
+  document.getElementById('prompt').addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') runResearch();
+  });
+</script>
+</body>
+</html>
