@@ -138,6 +138,10 @@ def run_planner(prompt: str):
         raise ValueError(f"Planner returned only {len(researchers)} researchers (min {MIN_RESEARCHERS})")
     plan["researchers"] = researchers
 
+    print(f"[DEBUG] Planner produced {len(researchers)} researchers", flush=True)
+    for r in researchers:
+        print(f"[DEBUG]   id={r.get('id')} source={r.get('source')!r} queries={r.get('queries')}", flush=True)
+
     cost = estimate_cost(SONNET, PLANNER_SYSTEM + prompt, raw)
     return plan, cost
 
@@ -156,9 +160,11 @@ def run_researcher(brief: dict) -> str:
         try:
             result = serper_search.run(query)
             all_results.append(f"Query: {query}\n{result}")
+            print(f"[DEBUG] query={query!r} -> {len(result)} chars", flush=True)
             time.sleep(1)  # small rate limit buffer between queries
         except Exception as e:
             all_results.append(f"Query: {query}\nSearch failed: {e}")
+            print(f"[DEBUG] query={query!r} EXCEPTION: {type(e).__name__}: {e}", flush=True)
 
     source = brief.get("source", "unknown source")
     looking_for = brief.get("looking_for", "")
@@ -184,6 +190,7 @@ def run_researchers_parallel(researchers: list) -> dict:
                     "output": f"Researcher failed: {e}",
                     "error":  str(e)
                 }
+            print(f"[DEBUG] researcher {rid} FAILED: {type(e).__name__}: {e}", flush=True)
 
     for brief in researchers:
         t = threading.Thread(target=run_one, args=(brief,))
