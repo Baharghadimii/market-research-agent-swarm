@@ -54,6 +54,26 @@ def estimate_cost(model: str, input_text: str, output_text: str) -> float:
         estimate_tokens(output_text) * prices["output"]
     ) / 1_000_000
 
+def extract_json(raw: str) -> dict:
+    """Robustly pull a JSON object out of an LLM response.
+
+    Models sometimes add trailing text after the JSON (a note, an extra
+    newline + comment) even when told to return ONLY JSON. A plain
+    json.loads() on the full string then fails with
+    'Extra data: line N column 1' because it successfully parses the
+    object and then finds leftover content after it. Slicing to the
+    first '{' ... matching last '}' before parsing avoids that.
+    """
+    raw = raw.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+
+    start = raw.find("{")
+    end   = raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise json.JSONDecodeError("No JSON object found in model output", raw, 0)
+
+    return json.loads(raw[start:end + 1])
+
 # ────────────────────────────────────────────────
 # STEP 1 — PLANNER
 # Reads prompt → designs entire research strategy from scratch.
@@ -110,8 +130,7 @@ def run_planner(prompt: str):
         temperature=0.4
     )
     raw = response.choices[0].message.content.strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    plan = json.loads(raw)
+    plan = extract_json(raw)
 
     # Enforce bounds
     researchers = plan.get("researchers", [])[:MAX_RESEARCHERS]
@@ -300,8 +319,7 @@ def run_synthesizer(domain: str, summaries: dict, researcher_results: dict, prom
         temperature=0.4
     )
     raw = response.choices[0].message.content.strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    report = json.loads(raw)
+    report = extract_json(raw)
     cost   = estimate_cost(SONNET, SYNTHESIZER_SYSTEM + context, raw)
     return report, cost
 
