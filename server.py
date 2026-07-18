@@ -29,8 +29,51 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1"
 )
 
-SONNET = "anthropic/claude-sonnet-4-5"
-FLASH  = "google/gemini-2.0-flash-lite-001"
+# ────────────────────────────────────────────────
+# MODEL CONFIG — loaded from model_config.json, not hardcoded.
+#
+# Why: on 2026-07-17, google/gemini-2.0-flash-lite-001 was pulled from
+# OpenRouter with no warning and every summarizer call started 404ing,
+# which silently produced "zero source data" reports. Two fixes:
+#   1. Ordered fallback chains (call_llm_with_fallback) so a dead model
+#      doesn't crash the run.
+#   2. Model lists live in model_config.json, which tools/model_watcher.py
+#      updates autonomously (see that file) when it detects a model has
+#      no working endpoints — so this file should rarely need manual edits.
+# ────────────────────────────────────────────────
+MODEL_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_config.json")
+
+# Used only if model_config.json is missing/corrupt — keeps the app from
+# hard-crashing on startup. model_watcher.py will regenerate the file.
+_DEFAULT_MODEL_CONFIG = {
+    "sonnet_models": [{"id": "anthropic/claude-sonnet-4-5", "input": 3.00, "output": 15.00}],
+    "flash_models": [
+        {"id": "google/gemini-2.5-flash-lite", "input": 0.10, "output": 0.40},
+        {"id": "google/gemini-3.1-flash-lite", "input": 0.25, "output": 1.50},
+    ],
+    "baseline_prices": {
+        "sonnet": {"input": 3.00, "output": 15.00},
+        "flash":  {"input": 0.10, "output": 0.40},
+    },
+    "price_ceiling_multiplier": 2.0,
+}
+
+def load_model_config() -> dict:
+    try:
+        with open(MODEL_CONFIG_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"[WARN] Could not load model_config.json ({e}) — using built-in defaults", flush=True)
+        return _DEFAULT_MODEL_CONFIG
+
+_model_config = load_model_config()
+
+SONNET_MODELS = [m["id"] for m in _model_config["sonnet_models"]]
+FLASH_MODELS  = [m["id"] for m in _model_config["flash_models"]]
+
+# Kept as the "primary" identifiers for readability elsewhere in this file.
+SONNET = SONNET_MODELS[0]
+FLASH  = FLASH_MODELS[0]
 
 # Bounded for cost predictability
 MAX_RESEARCHERS = 6
@@ -40,8 +83,8 @@ MIN_RESEARCHERS = 3
 # COST TRACKING
 # ────────────────────────────────────────────────
 COST_PER_1M = {
-    SONNET: {"input": 3.00,  "output": 15.00},
-    FLASH:  {"input": 0.075, "output": 0.30},
+    m["id"]: {"input": m["input"], "output": m["output"]}
+    for m in _model_config["sonnet_models"] + _model_config["flash_models"]
 }
 
 def estimate_tokens(text: str) -> int:
@@ -53,6 +96,25 @@ def estimate_cost(model: str, input_text: str, output_text: str) -> float:
         estimate_tokens(input_text)  * prices["input"] +
         estimate_tokens(output_text) * prices["output"]
     ) / 1_000_000
+
+def call_llm_with_fallback(models: list, **kwargs):
+    """Try each model in `models` in order; fall back to the next one if a
+    model is unavailable (deprecated, no endpoints, rate-limited, etc).
+
+    Returns (response, model_actually_used). Raises the last error if every
+    model in the chain fails.
+    """
+    last_err = None
+    for model in models:
+        try:
+            response = client.chat.completions.create(model=model, **kwargs)
+            return response, model
+        except Exception as e:
+            last_err = e
+            print(f"[WARN] model '{model}' failed ({type(e).__name__}: {e}) "
+                  f"— falling back to next model in chain", flush=True)
+            continue
+    raise last_err
 
 def extract_json(raw: str) -> dict:
     """Robustly pull a JSON object out of an LLM response.
@@ -120,8 +182,8 @@ Examples of BAD sources: "Reddit", "App stores", "Social media", "Forums"
 Be ruthlessly specific. The researchers can only search for what you tell them to search for."""
 
 def run_planner(prompt: str):
-    response = client.chat.completions.create(
-        model=SONNET,
+    response, model_used = call_llm_with_fallback(
+        SONNET_MODELS,
         messages=[
             {"role": "system", "content": PLANNER_SYSTEM},
             {"role": "user",   "content": prompt}
@@ -138,11 +200,9 @@ def run_planner(prompt: str):
         raise ValueError(f"Planner returned only {len(researchers)} researchers (min {MIN_RESEARCHERS})")
     plan["researchers"] = researchers
 
-    print(f"[DEBUG] Planner produced {len(researchers)} researchers", flush=True)
-    for r in researchers:
-        print(f"[DEBUG]   id={r.get('id')} source={r.get('source')!r} queries={r.get('queries')}", flush=True)
+    print(f"[INFO] Planner ({model_used}) produced {len(researchers)} researchers", flush=True)
 
-    cost = estimate_cost(SONNET, PLANNER_SYSTEM + prompt, raw)
+    cost = estimate_cost(model_used, PLANNER_SYSTEM + prompt, raw)
     return plan, cost
 
 # ────────────────────────────────────────────────
@@ -220,8 +280,8 @@ No JSON, no headers, no bullets — flowing paragraphs only.
 Output only the summary. No preamble."""
 
 def summarize_one(rid: str, raw: str, source: str):
-    response = client.chat.completions.create(
-        model=FLASH,
+    response, model_used = call_llm_with_fallback(
+        FLASH_MODELS,
         messages=[
             {"role": "system", "content": SUMMARIZER_PROMPT},
             {"role": "user",   "content": f"Source: {source}\n\nRaw search results:\n{raw}"}
@@ -230,7 +290,7 @@ def summarize_one(rid: str, raw: str, source: str):
         temperature=0.2
     )
     summary = response.choices[0].message.content.strip()
-    cost    = estimate_cost(FLASH, raw, summary)
+    cost    = estimate_cost(model_used, raw, summary)
     return summary, cost
 
 def summarize_all(researcher_results: dict):
@@ -242,10 +302,21 @@ def summarize_all(researcher_results: dict):
 
     def summarize_thread(rid, raw, source):
         nonlocal total_cost
-        summary, cost = summarize_one(rid, raw, source)
-        with lock:
-            summaries[rid] = summary
-            total_cost += cost
+        # IMPORTANT: this runs in a background thread. An uncaught exception
+        # here does NOT propagate to the main thread — Python just prints a
+        # traceback and the thread dies, silently leaving `rid` out of
+        # `summaries`. That's exactly how the 2026-07-17 outage produced
+        # "zero source data": every summarizer call 404'd, every thread died
+        # silently, and the synthesizer received an empty dict with no error.
+        try:
+            summary, cost = summarize_one(rid, raw, source)
+            with lock:
+                summaries[rid] = summary
+                total_cost += cost
+        except Exception as e:
+            print(f"[ERROR] summarizer failed for {rid} ({source}): {type(e).__name__}: {e}", flush=True)
+            with lock:
+                summaries[rid] = f"[Summary unavailable — all summarizer models failed: {e}]"
 
     for rid, data in researcher_results.items():
         source = data["brief"].get("source", rid)
@@ -316,8 +387,8 @@ def run_synthesizer(domain: str, summaries: dict, researcher_results: dict, prom
         source = researcher_results[rid]["brief"].get("source", rid)
         context += f"=== {source} ===\n{summary}\n\n"
 
-    response = client.chat.completions.create(
-        model=SONNET,
+    response, model_used = call_llm_with_fallback(
+        SONNET_MODELS,
         messages=[
             {"role": "system", "content": SYNTHESIZER_SYSTEM},
             {"role": "user",   "content": context}
@@ -327,7 +398,7 @@ def run_synthesizer(domain: str, summaries: dict, researcher_results: dict, prom
     )
     raw = response.choices[0].message.content.strip()
     report = extract_json(raw)
-    cost   = estimate_cost(SONNET, SYNTHESIZER_SYSTEM + context, raw)
+    cost   = estimate_cost(model_used, SYNTHESIZER_SYSTEM + context, raw)
     return report, cost
 
 # ────────────────────────────────────────────────
