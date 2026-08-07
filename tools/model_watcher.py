@@ -46,6 +46,9 @@ from datetime import datetime, timezone
 import requests
 from openai import OpenAI
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tools.email_alert import send_alert
+
 REPO_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(REPO_ROOT, "model_config.json")
 LOG_PATH    = os.path.join(REPO_ROOT, "watcher.log")
@@ -220,12 +223,29 @@ def check_role(role: str, config: dict) -> bool:
 
     # Nothing worked. Do not wipe the config — leave dead entries in place
     # (server.py's own fallback logic will still error clearly) and raise
-    # a loud, impossible-to-miss alert.
+    # a loud, impossible-to-miss alert: log line, marker file, AND email,
+    # since this is the one case where autonomous self-repair genuinely
+    # can't proceed and a human needs to step in.
     alert = (f"ALERT: role '{role}' has ZERO working models and discovery found "
-             f"no usable replacement within the price ceiling. Manual intervention needed.")
+              f"no usable replacement within the price ceiling. Manual intervention needed.")
     log(f"  {alert}")
     with open(ALERT_PATH, "a") as f:
         f.write(f"[{datetime.now(timezone.utc).isoformat()}] {alert}\n")
+
+    dead_list = "\n".join(f"  - {m['id']}" for m in models)
+    ok, detail = send_alert(
+        subject=f"Swarm Research: '{role}' models are ALL dead, watcher couldn't self-heal",
+        body=(
+            f"model_watcher.py could not find any working replacement for the '{role}' "
+            f"role within the price ceiling ({config.get('price_ceiling_multiplier', 2.0)}x "
+            f"baseline).\n\nAll models in the current chain failed:\n{dead_list}\n\n"
+            f"This needs manual attention — either raise the price ceiling in "
+            f"model_config.json, or manually pick a replacement model on OpenRouter "
+            f"and add it to the '{role}_models' list.\n\n"
+            f"— tools/model_watcher.py, running on the VPS"
+        ),
+    )
+    log(f"  alert email {'sent' if ok else 'FAILED: ' + detail}")
     return False
 
 

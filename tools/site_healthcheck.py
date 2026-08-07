@@ -19,8 +19,6 @@ available on the Pro plan as of 2026-07), or the desktop app being open.
 import os
 import sys
 import time
-import smtplib
-from email.mime.text import MIMEText
 from datetime import datetime, timezone
 
 import requests
@@ -30,12 +28,11 @@ sys.path.insert(0, REPO_ROOT)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
+from tools.email_alert import send_alert as _send_alert
+
 API_URL     = "http://127.0.0.1:5000/research"
 TEST_PROMPT = "Automated health check: gaps in baby sleep products for the Canadian market"
 TIMEOUT_SEC = 240  # full pipeline (planner -> research -> summarize -> synthesize) can take a couple minutes
-
-GMAIL_ADDRESS      = "bahareh.ghad@gmail.com"  # confirmed working sender/recipient, 2026-07-17
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 LOG_PATH = os.path.join(REPO_ROOT, "healthcheck.log")
 
@@ -48,21 +45,8 @@ def log(msg: str):
 
 
 def send_alert(subject: str, body: str):
-    if not GMAIL_APP_PASSWORD:
-        log("ALERT: GMAIL_APP_PASSWORD not set in .env — cannot send email alert!")
-        return
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"]    = GMAIL_ADDRESS
-    msg["To"]      = GMAIL_ADDRESS
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as s:
-            s.starttls()
-            s.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            s.send_message(msg)
-        log("Alert email sent successfully")
-    except Exception as e:
-        log(f"ALERT: failed to send alert email: {type(e).__name__}: {e}")
+    ok, detail = _send_alert(subject, body)
+    log(f"Alert email {'sent successfully' if ok else 'FAILED: ' + detail}")
 
 
 def check() -> tuple:

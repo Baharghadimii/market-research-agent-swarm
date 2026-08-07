@@ -437,9 +437,20 @@ def research():
         report, synth_cost = run_synthesizer(domain, summaries, researcher_results, prompt)
         total_cost += synth_cost
 
-        report["cost_usd"]          = round(total_cost, 4)
-        report["sources_used"]      = len(researchers)
-        report["planner_thinking"]  = plan.get("thinking", "")
+        report["cost_usd"] = round(total_cost, 4)
+        report["sources_used"] = len(researchers)
+        report["planner_thinking"] = plan.get("thinking", "")
+
+        # ── Methodology: full transparency on what was actually researched ──
+        report["methodology"] = [
+            {
+                "source": r.get("source", "unknown source"),
+                "queries": r.get("queries", []),
+                "looking_for": r.get("looking_for", ""),
+            }
+            for r in researchers
+        ]
+
         return jsonify(report)
 
     except json.JSONDecodeError as e:
