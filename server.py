@@ -24,9 +24,11 @@ from openai import OpenAI
 from tools.search import serper_results, serper_search
 from tools.evidence import (
     DISCOURSE_FORUMS,
+    PASTED_SOURCES,
     apply_evidence,
     assign_ids,
     coverage_summary,
+    parse_pasted,
     run_connectors,
     verify_extractions,
 )
@@ -282,6 +284,33 @@ def run_researchers_parallel(researchers: list) -> dict:
 
     return results
 
+def add_pasted_comments(researcher_results: dict, pasted) -> list:
+    """Treat comments a person collected by hand as one more research brief."""
+    briefs = []
+    if not isinstance(pasted, dict):
+        return briefs
+    for source, (label, _) in PASTED_SOURCES.items():
+        raw = pasted.get(source)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        items, unused = parse_pasted(source, raw)
+        brief = {
+            "source": f"Comments you pasted from {label}",
+            "queries": [],
+            "looking_for": "Complaints, wishes and workarounds related to the research goal",
+        }
+        researcher_results[f"pasted-{source}"] = {
+            "brief": brief,
+            "items": items,
+            "connector_log": [{
+                "type": "pasted", "target": label, "query": "", "status": "ok", "items": len(items),
+                "detail": f"{unused} blocks not used" if unused else "",
+            }],
+            "leads": "",
+        }
+        briefs.append(brief)
+    return briefs
+
 # ────────────────────────────────────────────────
 # STEP 3 — EXTRACTOR
 # Flash copies out exact quotes. It does not get to paraphrase, because
@@ -380,6 +409,8 @@ Every opportunity must list the evidence ids that support it in "evidence_ids".
 Cite only ids you were given, and only quotes that truly describe that problem.
 Web search leads are context for naming competitors. They are not evidence: never cite them,
 and never present them as what people said. An "open" status means nobody has confirmed an answer.
+Platforms marked "pasted by you" were collected by hand and could not be independently checked.
+Use them as supporting evidence, and rank problems confirmed on checked platforms first.
 The first opportunity must be the one "the_call" recommends.
 
 Rank opportunities by: signal convergence → tribe specificity → wedge clarity → capital efficiency → timing.
@@ -536,6 +567,7 @@ def research():
 
         # ── Step 2: Read real posts and comments in parallel ──
         researcher_results = run_researchers_parallel(researchers)
+        pasted_briefs = add_pasted_comments(researcher_results, (body or {}).get("pasted"))
         store = assign_ids({rid: d["items"] for rid, d in researcher_results.items()})
 
         # ── Step 3: Extract quotes, then verify them in code ──
@@ -568,7 +600,7 @@ def research():
                 "looking_for": r.get("looking_for", ""),
                 "connectors": r.get("connectors", []),
             }
-            for r in researchers
+            for r in researchers + pasted_briefs
         ]
 
         return jsonify(report)

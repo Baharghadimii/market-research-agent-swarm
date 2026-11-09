@@ -45,11 +45,21 @@ DISCOURSE_FORUMS = (
 
 NOT_SEARCHED = [
     "Reddit (no approved API access)",
-    "Facebook groups (private, no API)",
+    "Facebook (groups are private, no API)",
     "Discord servers (private, no API)",
 ]
 
 EVIDENCE_KINDS = ("complaint", "wish", "workaround")
+
+# Sites with no approved API. A person can browse them and paste what they find.
+PASTED_SOURCES = {
+    "reddit": ("Reddit", r"https://(?:[a-z0-9-]+\.)?reddit\.com/\S+"),
+    "facebook": ("Facebook", r"https://(?:[a-z0-9-]+\.)?facebook\.com/\S+"),
+}
+PASTED_SUFFIX = " (pasted by you)"
+MAX_PASTED_CHARS = 30000
+MAX_PASTED_PER_SOURCE = 45
+MIN_PASTED_CHARS = 20
 
 # Deliberately narrow: "I built an app and it keeps crashing" is a complaint.
 # The extraction model catches subtler promotion by marking it "seller".
@@ -111,6 +121,44 @@ def person_key(item: dict) -> str:
     if author in ("", "deleted", "[deleted]", "anonymous", "ghost"):
         author = "unknown"
     return f"{item.get('platform', '')}:{author}"
+
+
+def is_pasted(platform: str) -> bool:
+    return (platform or "").endswith(PASTED_SUFFIX)
+
+
+def _redact(text: str) -> str:
+    text = re.sub(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b", "[email removed]", text)
+    return re.sub(r"(?<!\d)(?:\+?\d[\s().-]?){10,14}(?!\d)", "[phone removed]", text)
+
+
+def parse_pasted(source: str, raw: str) -> tuple:
+    """Split pasted text into one item per blank-line-separated block.
+
+    Returns (items, blocks_not_used). Each block counts as one person, because
+    pasted text has no reliable author. Reports disclose that.
+    """
+    label, url_pattern = PASTED_SOURCES[source]
+    blocks = re.split(r"\n\s*\n", (raw or "").replace("\r\n", "\n").strip()[:MAX_PASTED_CHARS])
+    items, unused = [], 0
+    for block in blocks:
+        link = re.search(url_pattern, block)
+        text = re.sub(r"\s+", " ", re.sub(url_pattern, " ", block)).strip()
+        if len(text) < MIN_PASTED_CHARS:
+            unused += 1 if block.strip() else 0
+            continue
+        if len(items) >= MAX_PASTED_PER_SOURCE:
+            unused += 1
+            continue
+        items.append(
+            Item(
+                platform=label + PASTED_SUFFIX,
+                author=f"pasted-{source}-{len(items) + 1}",
+                text=_redact(text),
+                url=link.group(0) if link else "",
+            )
+        )
+    return items, unused
 
 
 def _cutoff() -> datetime:
@@ -428,9 +476,19 @@ def evidence_stats(ids: list, verified: dict) -> dict:
     rows = [verified[i] for i in ids]
     platforms = sorted({r["platform"] for r in rows})
     people = len({person_key(r) for r in rows})
+    level = strength_of(people, len(platforms))
+
+    # Pasted comments can support a finding, but cannot make it "Strong" alone,
+    # because their source and authors could not be checked.
+    checked = [r for r in rows if not is_pasted(r["platform"])]
+    checked_level = strength_of(len({person_key(r) for r in checked}), len({r["platform"] for r in checked}))
+    if level == "Strong" and checked_level != "Strong":
+        level = "Moderate"
+
     return {
-        "level": strength_of(people, len(platforms)),
+        "level": level,
         "people": people,
+        "pasted": people - len({person_key(r) for r in checked}),
         "mentions": len(rows),
         "platforms": platforms,
         "open": sum(r["status"] == "open" for r in rows),
@@ -487,6 +545,9 @@ def apply_evidence(report: dict, verified: dict) -> dict:
         )
         kept.append(opp)
 
+    # An idea resting only on hand-pasted comments cannot outrank checked evidence.
+    kept.sort(key=lambda o: o["evidence_strength"]["people"] == o["evidence_strength"]["pasted"])
+
     report["opportunities"] = kept
     watch = report.get("watch_list") or []
     report["watch_list"] = watch + [f"{n} — removed: no verified quote supports it" for n in dropped]
@@ -523,11 +584,31 @@ def apply_evidence(report: dict, verified: dict) -> dict:
             f"Evidence is narrow: {stats['people']} different people raised this, but only on "
             f"{stats['platforms'][0]}. Check whether it shows up anywhere else before relying on it."
         )
+    if stats["pasted"]:
+        note = (
+            f"This includes {stats['pasted']} {'person' if stats['pasted'] == 1 else 'people'} from comments "
+            "you pasted, which could not be independently checked."
+        )
+        report["evidence_notice"] = " ".join(filter(None, [report.get("evidence_notice"), note]))
     return report
 
 
 def coverage_summary(connector_logs: list, store: dict, verified: dict, counts: dict) -> dict:
     """What this run did and did not see, for the report itself."""
+    pasted = {c["target"] for c in connector_logs if c.get("type") == "pasted" and c.get("items")}
+    not_searched = [
+        f"{entry.split(' (')[0]} (only the comments you pasted)" if entry.split(" (")[0] in pasted else entry
+        for entry in NOT_SEARCHED
+    ]
+    limits = (
+        "Comments show what hurts, not whether anyone will pay. "
+        "The same person on two platforms counts as two people."
+    )
+    if pasted:
+        limits += (
+            " Pasted comments were checked against what you pasted, not against the original site, "
+            "and each pasted block counts as one person."
+        )
     return {
         "items_read": len(store),
         "quotes_extracted": counts.get("extracted", 0),
@@ -536,9 +617,6 @@ def coverage_summary(connector_logs: list, store: dict, verified: dict, counts: 
         "sellers_filtered": counts.get("filtered_sellers", 0),
         "people": len({person_key(r) for r in verified.values()}),
         "connectors": connector_logs,
-        "not_searched": NOT_SEARCHED,
-        "limits": (
-            "Comments show what hurts, not whether anyone will pay. "
-            "The same person on two platforms counts as two people."
-        ),
+        "not_searched": not_searched,
+        "limits": limits,
     }

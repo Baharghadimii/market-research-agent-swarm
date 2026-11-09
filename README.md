@@ -10,7 +10,7 @@ A planner-executor AI system that finds market gaps for any product, service, or
 4. **Synthesizer (Sonnet)** ranks up to 3 opportunities and must cite verified quotes. Code then computes how many different people and platforms support each one, so a model can't inflate the numbers.
 5. **Existing solutions check** looks for products already solving each problem, using Google results and labelled as such.
 
-Reddit, Facebook and Discord can't be read, and every report says so. YouTube needs a free `YOUTUBE_API_KEY`; `GITHUB_TOKEN` is optional and raises GitHub's rate limit.
+Reddit, Facebook and Discord can't be read, and every report says so. Comments from Reddit or Facebook can be pasted in by hand; they go through the same quote checks but are labelled as pasted, because their origin can't be confirmed. YouTube needs a free `YOUTUBE_API_KEY`; `GITHUB_TOKEN` is optional and raises GitHub's rate limit.
 
 ## Architecture
 

@@ -5,6 +5,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.evidence import (
     apply_evidence,
+    coverage_summary,
+    evidence_stats,
+    parse_pasted,
     clean_html,
     discourse_posts,
     person_key,
@@ -127,3 +130,60 @@ def test_old_and_happy_app_reviews_are_dropped(monkeypatch):
     search = {"results": [{"trackId": 1, "trackName": "App", "trackViewUrl": "https://x.test"}]}
     monkeypatch.setattr(evidence, "_get", lambda url, *a, **k: search if "search" in url else feed)
     assert len(evidence.app_store_reviews("App", apps=1)) == 1
+
+
+def test_pasted_text_splits_on_blank_lines_and_keeps_links():
+    raw = (
+        "This app charged me twice and support never replied.\nhttps://www.reddit.com/r/x/comments/1/a\n\n"
+        "ok\n\n"
+        "I gave up and made my own spreadsheet to track it all."
+    )
+    items, unused = parse_pasted("reddit", raw)
+    assert len(items) == 2 and unused == 1
+    assert items[0].url == "https://www.reddit.com/r/x/comments/1/a"
+    assert "reddit.com" not in items[0].text
+    assert items[1].url == ""
+    assert items[0].platform == "Reddit (pasted by you)"
+    assert items[0].author != items[1].author
+
+
+def test_pasted_text_removes_contact_details_and_foreign_links():
+    text = "Email me at jane.doe@example.com or call 604-555-0199 about this awful app https://evil.test/x"
+    item = parse_pasted("facebook", text)[0][0]
+    assert "jane.doe" not in item.text and "555" not in item.text
+    assert item.url == ""
+
+
+def test_pasted_alone_cannot_be_strong():
+    rows = {}
+    for n in range(10):
+        rows[f"A{n}"] = row(f"A{n}", author=f"a{n}", platform="Reddit (pasted by you)")
+        rows[f"B{n}"] = row(f"B{n}", author=f"b{n}", platform="Facebook (pasted by you)")
+    rows["C"] = row("C", author="c", platform="GitHub")
+    stats = evidence_stats(list(rows), rows)
+    assert stats["level"] == "Moderate"
+    assert stats["pasted"] == 20
+
+
+def test_report_warns_about_pasted_evidence():
+    rows = {"E1": row("E1", platform="Reddit (pasted by you)")}
+    report = apply_evidence(report_with(["E1"]), rows)
+    assert "could not be independently checked" in report["evidence_notice"]
+
+
+def test_pasted_only_idea_cannot_outrank_checked_evidence():
+    rows = {"E1": row("E1", platform="Reddit (pasted by you)"), "E2": row("E2", author="bo")}
+    report = apply_evidence(report_with(["E1"], ["E2"]), rows)
+    assert [o["name"] for o in report["opportunities"]] == ["Opp 1", "Opp 0"]
+    assert report["the_call"]["recommended_focus"] == "idea 1"
+
+
+def test_coverage_says_reddit_was_only_pasted():
+    log = [{"type": "pasted", "target": "Reddit", "items": 3}]
+    cov = coverage_summary(log, {}, {}, {})
+    assert "Reddit (only the comments you pasted)" in cov["not_searched"]
+    assert "Facebook (groups are private, no API)" in cov["not_searched"]
+    assert "Facebook (only the comments you pasted)" in coverage_summary(
+        [{"type": "pasted", "target": "Facebook", "items": 1}], {}, {}, {}
+    )["not_searched"]
+    assert "not against the original site" in cov["limits"]

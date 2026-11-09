@@ -464,6 +464,10 @@
       padding: 20px 22px;
     }
     .card.expanded .card-body { display: block; }
+    .paste-box { margin: 14px 0 18px; color: var(--ink-mid); font-size: .9rem; }
+    .paste-box summary { cursor: pointer; font-weight: 500; color: var(--ink); }
+    .paste-hint { margin: 8px 0 12px; line-height: 1.5; }
+    .paste-label { display: block; margin: 12px 0 6px; font-weight: 500; color: var(--ink); }
     .evidence-notice { margin-bottom: 16px; padding: 12px 16px; border-radius: 10px; background: var(--rose-light); color: var(--rose); font-size: .9rem; line-height: 1.45; }
     .quote { margin-top: 10px; padding-left: 12px; border-left: 3px solid var(--amber); overflow-wrap: anywhere; }
     .quote-text { color: var(--ink); line-height: 1.45; }
@@ -650,6 +654,14 @@
       <span class="example-chip" onclick="fillPrompt(this)">Bilingual parenting tools for immigrant families</span>
       <span class="example-chip" onclick="fillPrompt(this)">Baby sleep products gap in Canadian market</span>
     </div>
+    <details class="paste-box">
+      <summary>Add comments from Reddit or Facebook (optional)</summary>
+      <p class="paste-hint">The swarm can't read these sites, so paste comments you found yourself. Leave a blank line between comments, and include a link to the comment if you have one. Take out names and private details first, because pasted text is sent to AI models.</p>
+      <label class="paste-label" for="pasteReddit">Reddit comments</label>
+      <textarea id="pasteReddit" maxlength="30000" placeholder="One comment, then a blank line, then the next…"></textarea>
+      <label class="paste-label" for="pasteFacebook">Facebook comments</label>
+      <textarea id="pasteFacebook" maxlength="30000" placeholder="One comment, then a blank line, then the next…"></textarea>
+    </details>
     <button class="run-btn" id="runBtn" onclick="runResearch()">
       <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       Run Research
@@ -826,12 +838,12 @@
     const quotes = (opp.evidence || []).map(q => `
       <div class="quote">
         <div class="quote-text">“${esc(q.quote)}”</div>
-        <div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''} · ${esc(statusLabel[q.status] || q.status)} · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a></div>
+        <div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''} · ${esc(statusLabel[q.status] || q.status)}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
       </div>`).join('');
     return `
       <div class="card-field full">
         <div class="card-field-label">What people actually said</div>
-        <div class="card-field-value">${stats.people} ${stats.people === 1 ? 'person' : 'different people'} across ${(stats.platforms || []).length} ${(stats.platforms || []).length === 1 ? 'platform' : 'platforms'}. ${stats.open} still open, ${stats.answered} answered, ${stats.unknown} unknown.</div>
+        <div class="card-field-value">${stats.people} ${stats.people === 1 ? 'person' : 'different people'} across ${(stats.platforms || []).length} ${(stats.platforms || []).length === 1 ? 'platform' : 'platforms'}. ${stats.open} still open, ${stats.answered} answered, ${stats.unknown} unknown.${stats.pasted ? ` ${stats.pasted} from comments you pasted, which couldn't be independently checked.` : ''}</div>
         ${quotes}
       </div>`;
   }
@@ -856,7 +868,7 @@
     if (!cov) { card.style.display = 'none'; return; }
     const line = text => `<div class="mini-item">${text}</div>`;
     const connectorText = c => {
-      const target = [c.type, c.target].filter(Boolean).join(' · ');
+      const target = c.type === 'pasted' ? `You pasted · ${c.target}` : [c.type, c.target].filter(Boolean).join(' · ');
       const outcome = c.status === 'ok' ? `${c.items} items` : `${c.status}: ${c.detail}`;
       return line(`<strong>${esc(target)}</strong> ${c.query ? '“' + esc(c.query) + '”' : ''} — ${esc(outcome)}`);
     };
@@ -1022,6 +1034,8 @@
     document.getElementById('errorBox').classList.remove('visible');
     document.getElementById('runBtn').disabled = false;
     document.getElementById('prompt').value = '';
+    document.getElementById('pasteReddit').value = '';
+    document.getElementById('pasteFacebook').value = '';
     document.getElementById('prompt').focus();
   }
 
@@ -1046,7 +1060,13 @@
       const res = await fetch('/research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify({
+          prompt,
+          pasted: {
+            reddit: document.getElementById('pasteReddit').value,
+            facebook: document.getElementById('pasteFacebook').value,
+          },
+        })
       });
 
       if (!res.ok) {
