@@ -464,6 +464,10 @@
       padding: 20px 22px;
     }
     .card.expanded .card-body { display: block; }
+    .evidence-notice { margin-bottom: 16px; padding: 12px 16px; border-radius: 10px; background: var(--rose-light); color: var(--rose); font-size: .9rem; line-height: 1.45; }
+    .quote { margin-top: 10px; padding-left: 12px; border-left: 3px solid var(--amber); overflow-wrap: anywhere; }
+    .quote-text { color: var(--ink); line-height: 1.45; }
+    .quote-meta { margin-top: 3px; color: var(--ink-mid); font-size: .78rem; }
 
     .card-fields {
       display: grid;
@@ -666,12 +670,12 @@
       </div>
       <div class="step" id="step-agents">
         <div class="step-dot"></div>
-        <div class="step-label">Spinning up research agents</div>
-        <div class="step-tag">Gemini Flash · DeepSeek</div>
+        <div class="step-label">Reading real posts and comments</div>
+        <div class="step-tag">Public APIs</div>
       </div>
       <div class="step" id="step-summarize">
         <div class="step-dot"></div>
-        <div class="step-label">Compressing findings</div>
+        <div class="step-label">Checking every quote</div>
         <div class="step-tag">Gemini Flash</div>
       </div>
       <div class="step" id="step-synthesize">
@@ -704,6 +708,7 @@
 
     <!-- OPPORTUNITIES -->
     <div class="section-label">Top Opportunities</div>
+    <div class="evidence-notice" id="evidenceNotice" style="display:none;"></div>
     <div class="cards" id="cards"></div>
 
     <!-- LOWER GRID -->
@@ -716,6 +721,12 @@
         <div class="mini-card-title">⚡ Contradictions</div>
         <div class="mini-list" id="contradictions"></div>
       </div>
+    </div>
+
+    <!-- EVIDENCE COVERAGE -->
+    <div class="mini-card" id="coverageCard" style="margin-top:16px;display:none;">
+      <div class="mini-card-title">🧾 What This Report Actually Read</div>
+      <div class="mini-list" id="coverageList"></div>
     </div>
 
     <!-- METHODOLOGY -->
@@ -785,12 +796,78 @@
     return '';
   }
 
-  function convergenceBadge(convergence) {
-    if (!convergence) return '';
-    const match = convergence.match(/(\d)/);
-    const n = match ? parseInt(match[1]) : 0;
-    const cls = n >= 4 ? 'badge-green' : n === 3 ? 'badge-amber' : 'badge-blue';
-    return `<span class="badge ${cls}">${n}/4 sources</span>`;
+  function strengthBadge(strength) {
+    if (!strength) return '';
+    const cls = strength.level === 'Strong' ? 'badge-green' : strength.level === 'Thin' ? 'badge-rose' : 'badge-amber';
+    const label = strength.people === 1 ? '1 person' : `${strength.people} people`;
+    return `<span class="badge ${cls}">${esc(strength.level)} · ${label}</span>`;
+  }
+
+  // Report text includes words written by strangers, so it is never trusted as HTML.
+  function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, c => (
+      {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+    ));
+  }
+
+  function safeUrl(url) {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' ? esc(parsed.href) : '#';
+    } catch (e) {
+      return '#';
+    }
+  }
+
+  function evidenceHtml(opp) {
+    const stats = opp.evidence_strength;
+    if (!stats) return '';
+    const statusLabel = {open: 'Still open', answered: 'Answered', unknown: 'Status unknown'};
+    const quotes = (opp.evidence || []).map(q => `
+      <div class="quote">
+        <div class="quote-text">“${esc(q.quote)}”</div>
+        <div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''} · ${esc(statusLabel[q.status] || q.status)} · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a></div>
+      </div>`).join('');
+    return `
+      <div class="card-field full">
+        <div class="card-field-label">What people actually said</div>
+        <div class="card-field-value">${stats.people} ${stats.people === 1 ? 'person' : 'different people'} across ${(stats.platforms || []).length} ${(stats.platforms || []).length === 1 ? 'platform' : 'platforms'}. ${stats.open} still open, ${stats.answered} answered, ${stats.unknown} unknown.</div>
+        ${quotes}
+      </div>`;
+  }
+
+  function solutionsHtml(opp) {
+    const found = opp.existing_solutions;
+    if (!found) return '';
+    const verdicts = {covered: 'Already solved by others', partial: 'Partly solved by others', none_found: 'No direct solution found', unknown: 'Could not tell'};
+    const products = (found.products || []).map(p =>
+      `<a href="${safeUrl(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.name)}</a>`
+    ).join(', ');
+    return `
+      <div class="card-field full">
+        <div class="card-field-label">Does this already exist?</div>
+        <div class="card-field-value"><strong>${esc(verdicts[found.verdict] || found.verdict)}.</strong> ${esc(found.note)} ${products ? 'See ' + products + '.' : ''} <span class="quote-meta">Checked using ${esc(found.basis)}.</span></div>
+      </div>`;
+  }
+
+  function renderCoverage(data) {
+    const cov = data.evidence_coverage;
+    const card = document.getElementById('coverageCard');
+    if (!cov) { card.style.display = 'none'; return; }
+    const line = text => `<div class="mini-item">${text}</div>`;
+    const connectorText = c => {
+      const target = [c.type, c.target].filter(Boolean).join(' · ');
+      const outcome = c.status === 'ok' ? `${c.items} items` : `${c.status}: ${c.detail}`;
+      return line(`<strong>${esc(target)}</strong> ${c.query ? '“' + esc(c.query) + '”' : ''} — ${esc(outcome)}`);
+    };
+    document.getElementById('coverageList').innerHTML = [
+      line(`Read <strong>${cov.items_read}</strong> posts and comments. <strong>${cov.quotes_verified}</strong> quotes verified from <strong>${cov.people}</strong> people.`),
+      line(`Rejected ${cov.quotes_rejected} quotes that didn't match the original text, and filtered out ${cov.sellers_filtered} from people selling something.`),
+      ...(cov.connectors || []).map(connectorText),
+      line(`<strong>Not searched:</strong> ${esc((cov.not_searched || []).join(', '))}`),
+      line(esc(cov.limits)),
+    ].join('');
+    card.style.display = 'block';
   }
 
   // ── RENDER RESULTS ──
@@ -809,11 +886,16 @@
     const callFieldsEl = document.getElementById('callFields');
     callFieldsEl.innerHTML = '';
     if (call.for_whom) callFieldsEl.innerHTML +=
-      `<div class="call-field"><span class="call-field-label">For</span><span class="call-field-value">${call.for_whom}</span></div>`;
+      `<div class="call-field"><span class="call-field-label">For</span><span class="call-field-value">${esc(call.for_whom)}</span></div>`;
     if (call.why_now) callFieldsEl.innerHTML +=
-      `<div class="call-field"><span class="call-field-label">Why now</span><span class="call-field-value">${call.why_now}</span></div>`;
+      `<div class="call-field"><span class="call-field-label">Why now</span><span class="call-field-value">${esc(call.why_now)}</span></div>`;
     if (call.validation_step) callFieldsEl.innerHTML +=
-      `<div class="call-field"><span class="call-field-label">This week</span><span class="call-field-value">${call.validation_step}</span></div>`;
+      `<div class="call-field"><span class="call-field-label">This week</span><span class="call-field-value">${esc(call.validation_step)}</span></div>`;
+
+    // Evidence warning
+    const noticeEl = document.getElementById('evidenceNotice');
+    noticeEl.textContent = data.evidence_notice || '';
+    noticeEl.style.display = data.evidence_notice ? 'block' : 'none';
 
     // Cards
     const cardsEl = document.getElementById('cards');
@@ -822,7 +904,7 @@
       const steps = (opp.validation_plan || []).map((s,i) =>
         `<div class="v-step">
           <div class="v-step-num">${i+1}</div>
-          <div class="v-step-text">${s}</div>
+          <div class="v-step-text">${esc(s)}</div>
         </div>`
       ).join('');
 
@@ -831,9 +913,9 @@
           <div class="card-header" onclick="toggleCard(${idx})">
             <div class="card-rank">${idx+1}</div>
             <div class="card-title-wrap">
-              <div class="card-title">${opp.name || 'Opportunity'}</div>
+              <div class="card-title">${esc(opp.name || 'Opportunity')}</div>
               <div class="card-badges">
-                ${convergenceBadge(opp.signal_convergence)}
+                ${strengthBadge(opp.evidence_strength)}
                 ${capitalBadge(opp.capital_to_validate)}
                 ${opp.timing ? '<span class="badge badge-blue">Timed</span>' : ''}
               </div>
@@ -846,32 +928,34 @@
             <div class="card-fields">
               <div class="card-field full">
                 <div class="card-field-label">What</div>
-                <div class="card-field-value">${opp.what || ''}</div>
+                <div class="card-field-value">${esc(opp.what || '')}</div>
               </div>
               <div class="card-field">
                 <div class="card-field-label">Who</div>
-                <div class="card-field-value">${opp.who || ''}</div>
+                <div class="card-field-value">${esc(opp.who || '')}</div>
               </div>
               <div class="card-field">
                 <div class="card-field-label">Signal convergence</div>
-                <div class="card-field-value">${opp.signal_convergence || ''}</div>
+                <div class="card-field-value">${esc(opp.signal_convergence || '')}</div>
               </div>
               <div class="card-field full">
                 <div class="card-field-label">Wedge</div>
-                <div class="card-field-value">${opp.wedge || ''}</div>
+                <div class="card-field-value">${esc(opp.wedge || '')}</div>
               </div>
               <div class="card-field">
                 <div class="card-field-label">Capital to validate</div>
-                <div class="card-field-value">${opp.capital_to_validate || ''}</div>
+                <div class="card-field-value">${esc(opp.capital_to_validate || '')}</div>
               </div>
               <div class="card-field">
                 <div class="card-field-label">Risk</div>
-                <div class="card-field-value">${opp.risk || ''}</div>
+                <div class="card-field-value">${esc(opp.risk || '')}</div>
               </div>
               <div class="card-field full">
                 <div class="card-field-label">Timing</div>
-                <div class="card-field-value">${opp.timing || ''}</div>
+                <div class="card-field-value">${esc(opp.timing || '')}</div>
               </div>
+              ${evidenceHtml(opp)}
+              ${solutionsHtml(opp)}
               ${steps ? `
               <div class="card-field full">
                 <div class="card-field-label">Validation Plan</div>
@@ -890,13 +974,13 @@
     // Watch list
     const watchEl = document.getElementById('watchList');
     watchEl.innerHTML = (data.watch_list || []).map(item =>
-      `<div class="mini-item">${item}</div>`
+      `<div class="mini-item">${esc(item)}</div>`
     ).join('') || '<div class="mini-item">Nothing flagged this run.</div>';
 
     // Contradictions
     const contrEl = document.getElementById('contradictions');
     contrEl.innerHTML = (data.contradictions || []).map(item =>
-      `<div class="mini-item">${item}</div>`
+      `<div class="mini-item">${esc(item)}</div>`
     ).join('') || '<div class="mini-item">No major contradictions found.</div>';
 
     // Methodology
@@ -905,15 +989,17 @@
     if (methodology.length) {
       methodEl.innerHTML = methodology.map(m => `
         <div class="mini-item">
-          <strong>${m.source || 'Unknown source'}</strong><br>
-          <span style="color: var(--ink-light); font-size: .78rem;">Queries: ${(m.queries || []).join(', ')}</span><br>
-          <span style="color: var(--ink-mid); font-size: .8rem;">Looking for: ${m.looking_for || ''}</span>
+          <strong>${esc(m.source || 'Unknown source')}</strong><br>
+          <span style="color: var(--ink-light); font-size: .78rem;">Google searches: ${esc((m.queries || []).join(', '))}</span><br>
+          <span style="color: var(--ink-mid); font-size: .8rem;">Looking for: ${esc(m.looking_for || '')}</span>
         </div>
       `).join('');
       document.getElementById('methodologyCard').style.display = 'block';
     } else {
       document.getElementById('methodologyCard').style.display = 'none';
     }
+
+    renderCoverage(data);
 
     // Cost
     if (data.cost_usd !== undefined) {

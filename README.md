@@ -5,9 +5,12 @@ A planner-executor AI system that finds market gaps for any product, service, or
 ## How it works
 
 1. **Planner (Sonnet)** reads your prompt and designs the entire research strategy from scratch — what kind of thing is this, and where would real users of it actually complain or wish out loud? Produces 3-6 highly specific research briefs (e.g. "r/speechdelays subreddit," not just "Reddit"). No hardcoded platforms or categories — a tech product and a local coffee shop get completely different sources.
-2. **Researchers** execute each brief via direct web search (Serper) — no LLM involved, just fetching raw data per the Planner's exact queries.
-3. **Summarizer (Flash)** compresses each researcher's raw results into a short, signal-dense paragraph — cheap model, high volume.
-4. **Synthesizer (Sonnet)** reads all summaries, applies a convergence test (signal appearing across more sources = higher confidence), ranks up to 3 opportunities, and makes the call rather than just summarizing.
+2. **Researchers** read real posts and comments through public APIs: Hacker News, Stack Exchange, GitHub issues, App Store reviews, Discourse forums and YouTube. No LLM is involved. Google (Serper) is used only for leads and competitor names, never as evidence.
+3. **Extractor (Flash)** copies out exact quotes. Code rejects any quote that doesn't appear in the fetched text, and filters out people promoting their own products.
+4. **Synthesizer (Sonnet)** ranks up to 3 opportunities and must cite verified quotes. Code then computes how many different people and platforms support each one, so a model can't inflate the numbers.
+5. **Existing solutions check** looks for products already solving each problem, using Google results and labelled as such.
+
+Reddit, Facebook and Discord can't be read, and every report says so. YouTube needs a free `YOUTUBE_API_KEY`; `GITHUB_TOKEN` is optional and raises GitHub's rate limit.
 
 ## Architecture
 
@@ -18,6 +21,7 @@ server.py                      Flask backend, full pipeline lives here
 ├── summarize_all()             Flash compresses raw results
 ├── run_synthesizer()           Sonnet makes the final call
 tools/
+├── evidence.py                 public-API connectors, quote checks, people counts
 └── search.py                   Serper web search tool
 model_config.json               model lists + fallback chains (see below)
 static/                         frontend UI
