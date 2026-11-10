@@ -99,7 +99,7 @@ MAX_RESEARCHERS = 6
 MIN_RESEARCHERS = 3
 FORUM_LIST = "; ".join(f"{host} ({topic})" for host, topic in FORUM_TOPICS.items())
 MAX_ITEMS_PER_EXTRACTION = 30  # smaller batches: answers stop getting cut off at the length limit
-MAX_QUOTES_TO_SYNTHESIZER = 150
+MAX_QUOTES_TO_SYNTHESIZER = 200
 MAX_LEADS_CHARS = 1500
 
 # ────────────────────────────────────────────────

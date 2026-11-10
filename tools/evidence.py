@@ -180,8 +180,8 @@ _PAGE_MORE = re.compile(
 )
 _REDDIT_HANDLE = re.compile(r"^(?:u/)?([A-Za-z0-9_-]{3,24})$")
 _FB_NAME = re.compile(r"^(?:[A-Z][\w'’.-]*)(?: [A-Z][\w'’.-]*){1,3}$")
-MAX_PASTED_CHARS = 150000
-MAX_PASTED_PER_SOURCE = 150
+MAX_PASTED_CHARS = 400000      # about ten whole Reddit threads
+MAX_PASTED_PER_SOURCE = 400
 
 
 def _line_kind(line: str) -> str:

@@ -698,9 +698,9 @@
       <summary>Add comments from Reddit or Facebook (optional)</summary>
       <p class="paste-hint">The swarm can't read these sites, so paste what you found yourself. The quickest way: open a thread, press Cmd+A then Cmd+C, and paste the whole page. You can paste several pages, and putting each thread's link on the line above it lets quotes link back. Single comments separated by blank lines work too. Take out private details first, because pasted text is sent to AI models.</p>
       <label class="paste-label" for="pasteReddit">Reddit pages or comments</label>
-      <textarea id="pasteReddit" maxlength="150000" placeholder="Paste whole Reddit pages here…"></textarea>
+      <textarea id="pasteReddit" maxlength="400000" placeholder="Paste whole Reddit pages here…"></textarea>
       <label class="paste-label" for="pasteFacebook">Facebook pages or comments</label>
-      <textarea id="pasteFacebook" maxlength="150000" placeholder="Paste Facebook posts and comments here…"></textarea>
+      <textarea id="pasteFacebook" maxlength="400000" placeholder="Paste Facebook posts and comments here…"></textarea>
       <button type="button" class="paste-check" onclick="checkPasted()">Check what I pasted</button>
       <div class="paste-result" id="pasteResult"></div>
     </details>
