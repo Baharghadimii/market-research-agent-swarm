@@ -292,3 +292,24 @@ def test_notion_failure_does_not_break_a_run(client, monkeypatch):
     job = wait_job(client, r.get_json()["job_id"])
     assert job["status"] == "done"
     assert client.get(f"/reports/{job['report_id']}").get_json()["notion_url"] is None
+
+
+
+def test_salvage_keeps_complete_quotes_from_a_broken_answer():
+    raw = ('{"evidence": [{"item_id": "E1", "quote": "first complete quote here", "kind": "complaint"}, '
+           '{"item_id": "E2", "quote": "second complete one", "kind": "wish"}, {"item_id": "E3", "quote": "cut of')
+    assert [e["item_id"] for e in server.salvage_list(raw, "evidence")] == ["E1", "E2"]
+    assert server.salvage_list("no json at all", "evidence") == []
+
+
+def test_broken_report_json_gets_one_retry(monkeypatch):
+    answers = iter(['{"domain": "x", "opportunities": [ {"name": "a" "what": "missing comma"} ]}',
+                    '{"domain": "x", "the_call": {}, "opportunities": []}'])
+
+    class Msg:
+        def __init__(self, content):
+            self.choices = [type("C", (), {"message": type("M", (), {"content": content})()})()]
+
+    monkeypatch.setattr(server, "call_llm_with_fallback", lambda models, **k: (Msg(next(answers)), models[0]))
+    report, cost = server.run_synthesizer("x", {}, {}, "prompt")
+    assert report["domain"] == "x" and report["opportunities"] == []

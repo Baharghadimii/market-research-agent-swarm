@@ -139,6 +139,29 @@ def call_llm_with_fallback(models: list, **kwargs):
             continue
     raise last_err
 
+def salvage_list(raw: str, key: str) -> list:
+    """Recover the complete objects from a JSON answer that broke partway.
+
+    When an answer is cut off or has one bad entry, everything before the
+    break is still good. Reading objects one at a time keeps those.
+    """
+    start = raw.find(f'"{key}"')
+    start = raw.find("[", start) if start != -1 else -1
+    if start == -1:
+        return []
+    decoder, pos, found = json.JSONDecoder(), start + 1, []
+    while True:
+        while pos < len(raw) and raw[pos] in " \t\r\n,":
+            pos += 1
+        if pos >= len(raw) or raw[pos] != "{":
+            return found
+        try:
+            obj, pos = decoder.raw_decode(raw, pos)
+        except json.JSONDecodeError:
+            return found
+        if isinstance(obj, dict):
+            found.append(obj)
+
 def extract_json(raw: str) -> dict:
     """Robustly pull a JSON object out of an LLM response.
 
@@ -391,12 +414,19 @@ def _extract_once(brief: dict, items: list, prompt: str):
             {"role": "system", "content": EXTRACTOR_PROMPT},
             {"role": "user",   "content": user}
         ],
-        max_tokens=5000,
+        max_tokens=8000,
         temperature=0.1
     )
     raw = response.choices[0].message.content.strip()
-    parsed = extract_json(raw)
-    return parsed.get("evidence", []), estimate_cost(model_used, EXTRACTOR_PROMPT + user, raw)
+    cost = estimate_cost(model_used, EXTRACTOR_PROMPT + user, raw)
+    try:
+        return extract_json(raw).get("evidence", []), cost
+    except json.JSONDecodeError:
+        kept = salvage_list(raw, "evidence")
+        if not kept:
+            raise
+        print(f"[WARN] extraction answer broke partway; kept {len(kept)} complete quotes", flush=True)
+        return kept, cost
 
 def extract_all(researcher_results: dict, prompt: str):
     """Extract quotes per brief in parallel. Returns (extractions, cost, failures)."""
@@ -506,19 +536,27 @@ def run_synthesizer(domain: str, verified: dict, researcher_results: dict, promp
     for data in researcher_results.values():
         context += data["leads"][:MAX_LEADS_CHARS] + "\n\n"
 
-    response, model_used = call_llm_with_fallback(
-        SONNET_MODELS,
-        messages=[
-            {"role": "system", "content": SYNTHESIZER_SYSTEM},
-            {"role": "user",   "content": context}
-        ],
-        max_tokens=3500,
-        temperature=0.4
-    )
-    raw = response.choices[0].message.content.strip()
-    report = extract_json(raw)
-    cost   = estimate_cost(model_used, SYNTHESIZER_SYSTEM + context, raw)
-    return report, cost
+    # One malformed line in the report would otherwise throw away the whole run,
+    # so a report that doesn't parse gets one more attempt.
+    cost = 0.0
+    for attempt in (1, 2):
+        response, model_used = call_llm_with_fallback(
+            SONNET_MODELS,
+            messages=[
+                {"role": "system", "content": SYNTHESIZER_SYSTEM},
+                {"role": "user",   "content": context}
+            ],
+            max_tokens=4500,
+            temperature=0.4 if attempt == 1 else 0.2
+        )
+        raw = response.choices[0].message.content.strip()
+        cost += estimate_cost(model_used, SYNTHESIZER_SYSTEM + context, raw)
+        try:
+            return extract_json(raw), cost
+        except json.JSONDecodeError as e:
+            if attempt == 2:
+                raise
+            print(f"[WARN] report JSON did not parse ({e}); asking once more", flush=True)
 
 # ────────────────────────────────────────────────
 # STEP 5 — EXISTING SOLUTIONS
