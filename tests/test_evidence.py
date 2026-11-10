@@ -382,3 +382,14 @@ def test_a_deliberate_no_is_reported_as_a_finding():
     assert out["the_call"]["recommended_focus"] == "Don't build this: banks block it."
     assert "found no opportunity worth recommending" in out["evidence_notice"]
     assert out["watch_list"] == ["CSV import tool"]
+
+
+
+def test_preview_says_how_many_comments_were_left_out(monkeypatch):
+    monkeypatch.setattr(evidence, "MAX_PASTED_PER_SOURCE", 3)
+    raw = "\n\n".join(f"Comment number {n} about a real budgeting problem here" for n in range(5))
+    monkeypatch.setattr(evidence.parse_pasted, "__defaults__", (3, evidence.MAX_PASTED_CHARS))
+    p = evidence.preview_pasted("reddit", raw)
+    assert p["comments"] == 3 and p["left_out"] == 2 and p["capped"] is True
+    small = evidence.preview_pasted("reddit", "Just one comment about a real budgeting problem")
+    assert small["left_out"] == 0 and small["capped"] is False

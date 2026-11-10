@@ -180,8 +180,8 @@ _PAGE_MORE = re.compile(
 )
 _REDDIT_HANDLE = re.compile(r"^(?:u/)?([A-Za-z0-9_-]{3,24})$")
 _FB_NAME = re.compile(r"^(?:[A-Z][\w'’.-]*)(?: [A-Z][\w'’.-]*){1,3}$")
-MAX_PASTED_CHARS = 400000      # about ten whole Reddit threads
-MAX_PASTED_PER_SOURCE = 400
+MAX_PASTED_CHARS = 1000000     # about 25 whole Reddit threads
+MAX_PASTED_PER_SOURCE = 1000
 
 
 def _line_kind(line: str) -> str:
@@ -260,7 +260,8 @@ def _page_blocks(source: str, raw: str, url_pattern: str) -> list:
     return blocks
 
 
-def parse_pasted(source: str, raw: str) -> tuple:
+def parse_pasted(source: str, raw: str, limit: int = MAX_PASTED_PER_SOURCE,
+                 max_chars: int = MAX_PASTED_CHARS) -> tuple:
     """Split pasted text into comments.
 
     Accepts single comments separated by blank lines, or whole pages copied with
@@ -269,7 +270,7 @@ def parse_pasted(source: str, raw: str) -> tuple:
     reports disclose. Returns (items, blocks_not_used, mode).
     """
     label, url_pattern = PASTED_SOURCES[source]
-    raw = (raw or "").replace("\r\n", "\n").strip()[:MAX_PASTED_CHARS]
+    raw = (raw or "").replace("\r\n", "\n").strip()[:max_chars]
     if looks_like_whole_page(raw):
         mode, blocks = "page", _page_blocks(source, raw, url_pattern)
     else:
@@ -284,7 +285,7 @@ def parse_pasted(source: str, raw: str) -> tuple:
         if len(text) < MIN_PASTED_CHARS:
             unused += 1 if text else 0
             continue
-        if len(items) >= MAX_PASTED_PER_SOURCE:
+        if len(items) >= limit:
             unused += 1
             continue
         items.append(
@@ -301,12 +302,15 @@ def parse_pasted(source: str, raw: str) -> tuple:
 def preview_pasted(source: str, raw: str) -> dict:
     """What the swarm would take from a paste, without spending anything."""
     items, unused, mode = parse_pasted(source, raw)
+    everything, _, _ = parse_pasted(source, raw, limit=10**9, max_chars=10**9)
+    left_out = len(everything) - len(items)
     return {
         "mode": mode,
         "comments": len(items),
         "people": len({person_key(asdict(i)) for i in items}),
         "unused": unused,
-        "capped": len(items) >= MAX_PASTED_PER_SOURCE,
+        "capped": left_out > 0,
+        "left_out": left_out,
         "samples": [i.text[:160] for i in items[:3]],
     }
 
