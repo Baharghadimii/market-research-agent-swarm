@@ -620,6 +620,30 @@
       font-weight: 300;
     }
 
+    /* ── PROGRESS, TOOLBAR, LISTS ── */
+    .step-main { flex: 1; min-width: 0; }
+    .step-detail { font-size: .75rem; color: var(--ink-light); margin-top: 2px; overflow-wrap: anywhere; }
+    .step-detail:empty { display: none; }
+    .spend-line { margin-top: 10px; font-size: .8rem; color: var(--ink-light); }
+    .spend-line.over { color: var(--rose); }
+    .home-lists { display: flex; flex-direction: column; gap: 16px; margin-bottom: 40px; }
+    .report-row { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--cream-border); }
+    .report-row:last-child { border-bottom: none; }
+    .report-row-main { flex: 1; min-width: 0; cursor: pointer; overflow-wrap: anywhere; }
+    .report-row-main:hover .report-row-prompt { text-decoration: underline; }
+    .report-row-prompt { font-size: .85rem; color: var(--ink); line-height: 1.45; }
+    .report-row-meta { margin-top: 3px; font-size: .75rem; color: var(--ink-light); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .small-btn { flex-shrink: 0; padding: 4px 10px; border: 1px solid var(--cream-border); border-radius: 6px; background: white; color: var(--ink-mid); font: inherit; font-size: .75rem; cursor: pointer; }
+    .small-btn:hover { border-color: var(--rose); color: var(--rose); }
+    .report-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 20px; }
+    .report-toolbar .paste-check { margin-top: 0; }
+    .toolbar-note { font-size: .78rem; color: var(--rose); overflow-wrap: anywhere; }
+    .toolbar-link { font-size: .85rem; }
+    .track-explain { margin: -10px 0 18px; }
+    .deep-banner { margin-bottom: 16px; font-size: .88rem; color: var(--ink-mid); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+    .deeper-btn { margin-top: 16px; }
+    .product-line { margin-bottom: 4px; overflow-wrap: anywhere; }
+
     /* ── RESPONSIVE ── */
     @media (max-width: 600px) {
       header { padding: 20px; }
@@ -671,7 +695,20 @@
       <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       Run Research
     </button>
+    <div class="spend-line" id="spendLine"></div>
   </section>
+
+  <!-- PAST REPORTS -->
+  <div class="home-lists" id="homeLists">
+    <div class="mini-card" id="pastCard">
+      <div class="mini-card-title">Past reports</div>
+      <div id="pastList"></div>
+    </div>
+    <div class="mini-card" id="trackersCard" style="display:none;">
+      <div class="mini-card-title">Tracked questions</div>
+      <div id="trackersList"></div>
+    </div>
+  </div>
 
   <!-- LOADING -->
   <div class="loading-state" id="loading">
@@ -682,23 +719,28 @@
     <div class="steps">
       <div class="step" id="step-plan">
         <div class="step-dot"></div>
-        <div class="step-label">Planning research strategy</div>
+        <div class="step-main"><div class="step-label">Planning research strategy</div><div class="step-detail"></div></div>
         <div class="step-tag">Sonnet</div>
       </div>
       <div class="step" id="step-agents">
         <div class="step-dot"></div>
-        <div class="step-label">Reading real posts and comments</div>
+        <div class="step-main"><div class="step-label">Reading real posts and comments</div><div class="step-detail"></div></div>
         <div class="step-tag">Public APIs</div>
       </div>
       <div class="step" id="step-summarize">
         <div class="step-dot"></div>
-        <div class="step-label">Checking every quote</div>
+        <div class="step-main"><div class="step-label">Checking every quote</div><div class="step-detail"></div></div>
         <div class="step-tag">Gemini Flash</div>
       </div>
       <div class="step" id="step-synthesize">
         <div class="step-dot"></div>
-        <div class="step-label">Synthesizing final report</div>
+        <div class="step-main"><div class="step-label">Synthesizing final report</div><div class="step-detail"></div></div>
         <div class="step-tag">Sonnet</div>
+      </div>
+      <div class="step" id="step-extras">
+        <div class="step-dot"></div>
+        <div class="step-main"><div class="step-label">Checking competitors and Reddit threads</div><div class="step-detail"></div></div>
+        <div class="step-tag">Search + App Store</div>
       </div>
     </div>
   </div>
@@ -715,6 +757,11 @@
       </div>
       <button class="reset-btn" onclick="resetUI()">← New research</button>
     </div>
+
+    <div class="report-toolbar" id="reportToolbar"></div>
+    <div class="quote-meta track-explain">Reruns this question every 30 days and shows what changed. Pasted comments aren't saved, so tracked runs use public sources only.</div>
+    <div id="compareSlot"></div>
+    <div class="deep-banner" id="deepBanner" style="display:none;"></div>
 
     <!-- THE CALL -->
     <div class="the-call" id="theCall">
@@ -776,38 +823,27 @@
     document.getElementById('prompt').focus();
   }
 
-  // ── STEP ANIMATOR ──
-  const STEPS = ['step-plan','step-agents','step-summarize','step-synthesize'];
-  let stepTimer = null;
+  // ── PROGRESS STEPS (driven by the job's real stage) ──
+  const STAGES = ['plan','read','check','write','extras'];
+  const STAGE_EL = {plan:'step-plan', read:'step-agents', check:'step-summarize', write:'step-synthesize', extras:'step-extras'};
 
-  function animateSteps() {
-    let i = 0;
-    // reset
-    STEPS.forEach(id => {
-      const el = document.getElementById(id);
-      el.classList.remove('active','done');
+  function updateSteps(job) {
+    const done = job.done_stages || [];
+    STAGES.forEach(st => {
+      const el = document.getElementById(STAGE_EL[st]);
+      const isDone = done.includes(st);
+      const isActive = !isDone && job.stage === st && job.status === 'running';
+      el.classList.toggle('done', isDone);
+      el.classList.toggle('active', isActive);
+      el.querySelector('.step-detail').textContent = isActive ? (job.detail || '') : '';
     });
-
-    function next() {
-      if (i > 0) {
-        document.getElementById(STEPS[i-1]).classList.remove('active');
-        document.getElementById(STEPS[i-1]).classList.add('done');
-      }
-      if (i < STEPS.length) {
-        document.getElementById(STEPS[i]).classList.add('active');
-        i++;
-        stepTimer = setTimeout(next, 18000); // ~18s per step
-      }
-    }
-    next();
   }
 
-  function completeSteps() {
-    clearTimeout(stepTimer);
-    STEPS.forEach(id => {
-      const el = document.getElementById(id);
-      el.classList.remove('active');
-      el.classList.add('done');
+  function resetSteps() {
+    STAGES.forEach(st => {
+      const el = document.getElementById(STAGE_EL[st]);
+      el.classList.remove('active', 'done');
+      el.querySelector('.step-detail').textContent = '';
     });
   }
 
@@ -843,6 +879,25 @@
     }
   }
 
+  const PAY_LABEL = {pays_now: 'Pays today', would_pay: 'Would pay', switched: 'Switched or cancelled'};
+
+  function payHtml(opp) {
+    const ps = opp.pay_signals;
+    if (!ps) return '';
+    const people = Number(ps.people) || 0;
+    const quotes = (ps.quotes || []).map(q => `
+      <div class="quote">
+        <div class="quote-text">“${esc(q.quote)}”</div>
+        <div class="quote-meta">${esc(PAY_LABEL[q.pay] || '')}${PAY_LABEL[q.pay] ? ' · ' : ''}${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
+      </div>`).join('');
+    return `
+      <div class="card-field full">
+        <div class="card-field-label">Signs people would pay</div>
+        <div class="card-field-value">${people > 0 ? `${people} ${people === 1 ? 'person mentions' : 'people mention'} paying, wanting to pay, or switching products.` : 'No one in these quotes mentioned paying.'}</div>
+        ${people > 0 ? quotes : ''}
+      </div>`;
+  }
+
   function evidenceHtml(opp) {
     const stats = opp.evidence_strength;
     if (!stats) return '';
@@ -850,7 +905,7 @@
     const quotes = (opp.evidence || []).map(q => `
       <div class="quote">
         <div class="quote-text">“${esc(q.quote)}”</div>
-        <div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''} · ${esc(statusLabel[q.status] || q.status)}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
+        <div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''} · ${esc(statusLabel[q.status] || q.status)}${PAY_LABEL[q.pay] ? ' · ' + esc(PAY_LABEL[q.pay]) : ''}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
       </div>`).join('');
     return `
       <div class="card-field full">
@@ -864,13 +919,22 @@
     const found = opp.existing_solutions;
     if (!found) return '';
     const verdicts = {covered: 'Already solved by others', partial: 'Partly solved by others', none_found: 'No direct solution found', unknown: 'Could not tell'};
-    const products = (found.products || []).map(p =>
-      `<a href="${safeUrl(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.name)}</a>`
-    ).join(', ');
+    const num = n => Number(n).toLocaleString();
+    const strengthCls = {Dominant: 'badge-rose', Established: 'badge-amber', Small: 'badge-green'};
+    const products = (found.products || []).map(p => {
+      let stats = '';
+      if (p.app_rating != null && p.app_rating !== '') {
+        stats = `${esc(num(p.app_rating))}★${p.app_ratings != null ? ` from ${esc(num(p.app_ratings))} App Store ratings` : ' on the App Store'}${p.price ? ' · ' + esc(p.price) : ''}`;
+      } else if (p.web_rating != null && p.web_rating !== '') {
+        stats = `${esc(num(p.web_rating))}★${p.web_rating_count != null ? ` from ${esc(num(p.web_rating_count))} reviews shown on Google` : ' shown on Google'}`;
+      }
+      const badge = strengthCls[p.strength] ? ` <span class="badge ${strengthCls[p.strength]}">${esc(p.strength)}</span>` : '';
+      return `<div class="product-line"><a href="${safeUrl(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.name)}</a>${badge}${stats ? ` <span class="quote-meta">${stats}</span>` : ''}</div>`;
+    }).join('');
     return `
       <div class="card-field full">
         <div class="card-field-label">Does this already exist?</div>
-        <div class="card-field-value"><strong>${esc(verdicts[found.verdict] || found.verdict)}.</strong> ${esc(found.note)} ${products ? 'See ' + products + '.' : ''} <span class="quote-meta">Checked using ${esc(found.basis)}.</span></div>
+        <div class="card-field-value"><strong>${esc(verdicts[found.verdict] || found.verdict)}.</strong> ${esc(found.note)}${products ? '<div style="margin-top:6px;">' + products + '</div>' : ''} <span class="quote-meta">Checked using Google results and the App Store.</span></div>
       </div>`;
   }
 
@@ -922,19 +986,22 @@
     out.innerHTML = lines.join('<br>') || 'Nothing pasted yet.';
   }
 
+  const CONNECTOR_LABEL = {hn_comments: 'Hacker News', stack_exchange: 'Stack Exchange', github_issues: 'GitHub issues', github_discussions: 'GitHub Discussions', app_store_reviews: 'App Store reviews', discourse: 'Forum', youtube_comments: 'YouTube', lemmy_comments: 'Lemmy'};
+
   function renderCoverage(data) {
     const cov = data.evidence_coverage;
     const card = document.getElementById('coverageCard');
     if (!cov) { card.style.display = 'none'; return; }
     const line = text => `<div class="mini-item">${text}</div>`;
     const connectorText = c => {
-      const target = c.type === 'pasted' ? `You pasted · ${c.target}` : [c.type, c.target].filter(Boolean).join(' · ');
+      const target = c.type === 'pasted' ? `You pasted · ${c.target}` : [CONNECTOR_LABEL[c.type] || c.type, c.target].filter(Boolean).join(' · ');
       const outcome = c.status === 'ok' ? `${c.items} items` : `${c.status}: ${c.detail}`;
       return line(`<strong>${esc(target)}</strong> ${c.query ? '“' + esc(c.query) + '”' : ''} — ${esc(outcome)}`);
     };
     document.getElementById('coverageList').innerHTML = [
       line(`Read <strong>${cov.items_read}</strong> posts and comments. <strong>${cov.quotes_verified}</strong> quotes verified from <strong>${cov.people}</strong> people.`),
       line(`Rejected ${cov.quotes_rejected} quotes that didn't match the original text, and filtered out ${cov.sellers_filtered} from people selling something.`),
+      ...(cov.pay_quotes != null ? [line(`${esc(cov.pay_quotes)} quotes mention paying, wanting to pay, or switching.`)] : []),
       ...(cov.connectors || []).map(connectorText),
       line(`<strong>Not searched:</strong> ${esc((cov.not_searched || []).join(', '))}`),
       line(esc(cov.limits)),
@@ -943,12 +1010,20 @@
   }
 
   // ── RENDER RESULTS ──
-  function renderResults(data, prompt, elapsed) {
+  function renderResults(data) {
+    const saved = data.saved || {};
+    const prompt = saved.prompt || '';
     // Title
     document.getElementById('resultsTitle').textContent =
       data.domain || 'Research Complete';
+    const when = saved.created_at ? new Date(saved.created_at).toLocaleString() : '';
+    const cost = saved.cost != null ? saved.cost : data.cost_usd;
     document.getElementById('resultsMeta').textContent =
-      `"${prompt.substring(0,80)}${prompt.length>80?'…':''}" · ${elapsed}s`;
+      [`"${prompt.substring(0,80)}${prompt.length>80?'…':''}"`, when, cost != null ? `$${Number(cost).toFixed(2)}` : ''].filter(Boolean).join(' · ');
+
+    renderToolbar(data);
+    renderCompare(data.compare);
+    renderDeepBanner(data);
 
     // The Call
     const call = data.the_call || {};
@@ -1027,12 +1102,16 @@
                 <div class="card-field-value">${esc(opp.timing || '')}</div>
               </div>
               ${evidenceHtml(opp)}
+              ${payHtml(opp)}
               ${solutionsHtml(opp)}
               ${steps ? `
               <div class="card-field full">
                 <div class="card-field-label">Validation Plan</div>
                 <div class="validation-steps">${steps}</div>
               </div>` : ''}
+              <div class="card-field full">
+                <button type="button" class="paste-check deeper-btn" onclick="digDeeper(${idx})">Dig deeper into this idea</button>
+              </div>
             </div>
           </div>
         </div>`;
@@ -1075,9 +1154,10 @@
     renderThreads(data);
 
     // Cost
-    if (data.cost_usd !== undefined) {
+    if (cost != null) {
       document.getElementById('costText').textContent =
-        `This run cost $${data.cost_usd.toFixed(4)} USD`;
+        `This run cost $${Number(cost).toFixed(4)} USD`;
+      document.getElementById('costPill').style.display = '';
     } else {
       document.getElementById('costPill').style.display = 'none';
     }
@@ -1088,12 +1168,352 @@
     document.getElementById(`card-${idx}`).classList.toggle('expanded');
   }
 
-  // ── RESET ──
-  function resetUI() {
-    document.getElementById('results').classList.remove('visible');
-    document.getElementById('loading').classList.remove('visible');
+  // ── HELPERS FOR NEW FEATURES ──
+  let currentReport = null;
+  let currentReportId = null;
+  let pollToken = 0;
+
+  function localDate(iso) {
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleString();
+  }
+
+  function showError(message) {
+    const box = document.getElementById('errorBox');
+    box.textContent = message;
+    box.classList.add('visible');
+  }
+
+  function setView(view) {
+    // view: 'home' | 'loading' | 'results'
+    document.getElementById('results').classList.toggle('visible', view === 'results');
+    document.getElementById('loading').classList.toggle('visible', view === 'loading');
+    document.getElementById('homeLists').style.display = view === 'home' ? '' : 'none';
+    document.getElementById('runBtn').disabled = view === 'loading';
+  }
+
+  async function api(method, url, body) {
+    const opts = {method, headers: {}};
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(url, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  // ── SPENDING ──
+  async function loadSpending() {
+    const el = document.getElementById('spendLine');
+    try {
+      const s = await api('GET', '/spending');
+      const over = s.can_run === false;
+      el.textContent = `Today: $${Number(s.spent_today).toFixed(2)} of $${Number(s.daily_limit).toFixed(2)} spent${over ? ' (daily limit reached)' : ''}`;
+      el.classList.toggle('over', over);
+    } catch (e) {
+      el.textContent = '';
+    }
+  }
+
+  // ── PAST REPORTS ──
+  const KIND_LABEL = {deep: 'Deep dive', tracked: 'Tracked run'};
+
+  async function loadPastReports() {
+    const pastList = document.getElementById('pastList');
+    const trackersCard = document.getElementById('trackersCard');
+    let data;
+    try {
+      data = await api('GET', '/reports');
+    } catch (e) {
+      pastList.textContent = 'Could not load saved reports.';
+      return;
+    }
+    const reports = data.reports || [];
+    if (!reports.length) {
+      pastList.innerHTML = '<div class="mini-item quote-meta" style="padding-left:0;">No saved reports yet.</div>';
+    } else {
+      pastList.innerHTML = reports.map(r => {
+        const p = r.prompt || '';
+        const short = p.length > 90 ? p.substring(0, 90) + '…' : p;
+        const kind = KIND_LABEL[r.kind] ? `<span class="badge badge-blue">${esc(KIND_LABEL[r.kind])}</span>` : '';
+        const idea = r.top_idea ? `<span>${esc(r.top_idea)}${r.level ? ' · ' + esc(r.level) : ''}</span>` : (r.level ? `<span>${esc(r.level)}</span>` : '');
+        const cost = r.cost != null ? `<span>$${Number(r.cost).toFixed(2)}</span>` : '';
+        return `
+          <div class="report-row">
+            <div class="report-row-main" data-report="${esc(r.id)}">
+              <div class="report-row-prompt">${esc(short)}</div>
+              <div class="report-row-meta"><span>${esc(localDate(r.created_at))}</span>${kind}${idea}${cost}</div>
+            </div>
+            <button type="button" class="small-btn" data-delete-report="${esc(r.id)}">Delete</button>
+          </div>`;
+      }).join('');
+    }
+    const trackers = data.trackers || [];
+    trackersCard.style.display = trackers.length ? '' : 'none';
+    document.getElementById('trackersList').innerHTML = trackers.map(t => `
+      <div class="report-row">
+        <div class="report-row-main" style="cursor:default;">
+          <div class="report-row-prompt">${esc(t.prompt)}</div>
+          <div class="report-row-meta"><span>Next run: ${esc(localDate(t.next_run))}</span></div>
+        </div>
+        <button type="button" class="small-btn" data-stop-tracker="${esc(t.id)}">Stop</button>
+      </div>`).join('');
+  }
+
+  document.getElementById('homeLists').addEventListener('click', async e => {
+    const del = e.target.closest('[data-delete-report]');
+    const stop = e.target.closest('[data-stop-tracker]');
+    const open = e.target.closest('[data-report]');
+    try {
+      if (del) {
+        if (!confirm("Delete this saved report? This can't be undone.")) return;
+        await api('DELETE', '/reports/' + encodeURIComponent(del.dataset.deleteReport));
+        loadPastReports();
+      } else if (stop) {
+        await api('DELETE', '/trackers/' + encodeURIComponent(stop.dataset.stopTracker));
+        loadPastReports();
+      } else if (open) {
+        location.hash = '#report=' + encodeURIComponent(open.dataset.report);
+      }
+    } catch (err) {
+      showError(`Something went wrong: ${err.message}`);
+    }
+  });
+
+  // ── LOADING A SAVED REPORT ──
+  function hashReportId() {
+    const m = location.hash.match(/^#report=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  async function loadReport(id) {
+    pollToken++;
     document.getElementById('errorBox').classList.remove('visible');
-    document.getElementById('runBtn').disabled = false;
+    try {
+      const data = await api('GET', '/reports/' + encodeURIComponent(id));
+      currentReport = data;
+      currentReportId = id;
+      setView('results');
+      renderResults(data);
+      window.scrollTo(0, 0);
+    } catch (err) {
+      currentReport = null;
+      currentReportId = null;
+      setView('home');
+      loadPastReports();
+      showError(`Could not open that report: ${err.message}`);
+    }
+  }
+
+  window.addEventListener('hashchange', () => {
+    const id = hashReportId();
+    if (id) {
+      if (id !== currentReportId) loadReport(id);
+    } else if (currentReportId) {
+      showHome();
+    }
+  });
+
+  // ── TOOLBAR ──
+  function slug(text) {
+    return String(text || 'report').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 50) || 'report';
+  }
+
+  function reportToMarkdown(data) {
+    const saved = data.saved || {};
+    const call = data.the_call || {};
+    const focus = data.focus && data.focus.name ? data.focus.name : '';
+    const out = [];
+    out.push(`# ${data.domain || 'Research report'}`);
+    out.push('');
+    out.push(`Date: ${saved.created_at ? localDate(saved.created_at) : ''}`);
+    if (saved.prompt) out.push(`Question: ${saved.prompt}`);
+    if (saved.kind === 'deep' && focus) out.push(`Deep dive on: ${focus}`);
+    out.push('');
+    out.push('## The call');
+    if (call.recommended_focus) out.push(`- Focus: ${call.recommended_focus}`);
+    if (call.for_whom) out.push(`- For: ${call.for_whom}`);
+    if (call.why_now) out.push(`- Why now: ${call.why_now}`);
+    if (call.validation_step) out.push(`- This week: ${call.validation_step}`);
+    if (data.evidence_notice) { out.push(''); out.push(`**${data.evidence_notice}**`); }
+    out.push('');
+    out.push('## Opportunities');
+    (data.opportunities || []).forEach((opp, i) => {
+      out.push('');
+      out.push(`### ${i + 1}. ${opp.name || 'Opportunity'}`);
+      if (opp.what) out.push(`**What:** ${opp.what}`);
+      if (opp.who) out.push(`**Who:** ${opp.who}`);
+      const st = opp.evidence_strength;
+      if (st) out.push(`**Evidence:** ${st.level}, ${st.people} ${st.people === 1 ? 'person' : 'people'}`);
+      (opp.evidence || []).slice(0, 5).forEach(q => {
+        out.push('');
+        out.push(`> ${q.quote} — ${q.platform}${q.url ? ' (' + q.url + ')' : ''}`);
+      });
+      const ps = opp.pay_signals;
+      if (ps) {
+        out.push('');
+        out.push(`**Signs people would pay:** ${ps.people > 0 ? `${ps.people} ${ps.people === 1 ? 'person mentions' : 'people mention'} paying, wanting to pay, or switching products.` : 'No one in these quotes mentioned paying.'}`);
+        (ps.quotes || []).slice(0, 5).forEach(q => {
+          out.push('');
+          out.push(`> ${q.quote} — ${q.platform}${q.url ? ' (' + q.url + ')' : ''}${PAY_LABEL[q.pay] ? ' [' + PAY_LABEL[q.pay] + ']' : ''}`);
+        });
+      }
+      const ex = opp.existing_solutions;
+      if (ex) {
+        out.push('');
+        out.push(`**Existing solutions:** ${ex.note || ''}`);
+        (ex.products || []).forEach(p => {
+          out.push(`- ${p.name}${p.strength && p.strength !== 'Unknown' ? ' (' + p.strength + ')' : ''}${p.url ? ' ' + p.url : ''}`);
+        });
+      }
+    });
+    const cov = data.evidence_coverage;
+    if (cov) {
+      out.push('');
+      out.push('## What this report read');
+      out.push(`- Read ${cov.items_read} posts and comments; ${cov.quotes_verified} quotes verified from ${cov.people} people.`);
+      if (cov.pay_quotes != null) out.push(`- ${cov.pay_quotes} quotes mention paying, wanting to pay, or switching.`);
+      (cov.connectors || []).forEach(c => {
+        out.push(`- ${CONNECTOR_LABEL[c.type] || c.type}${c.target ? ' · ' + c.target : ''}: ${c.status === 'ok' ? c.items + ' items' : c.status}`);
+      });
+      if (cov.limits) out.push(`- ${cov.limits}`);
+    }
+    const threads = data.reddit_threads || [];
+    if (threads.length) {
+      out.push('');
+      out.push('## Reddit threads to read');
+      threads.forEach(t => out.push(`- [${t.title}](${t.url}) — ${t.subreddit || ''}`));
+    }
+    out.push('');
+    return out.join('\n');
+  }
+
+  function downloadReport() {
+    if (!currentReport) return;
+    const saved = currentReport.saved || {};
+    const d = saved.created_at ? new Date(saved.created_at) : new Date();
+    const day = isNaN(d) ? '' : d.toISOString().substring(0, 10);
+    const blob = new Blob([reportToMarkdown(currentReport)], {type: 'text/markdown;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `swarm-report-${day}-${slug(currentReport.domain)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function notionSlotHtml(url, message) {
+    if (url) return `<a class="toolbar-link" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">Open in Notion</a>`;
+    return `<button type="button" class="paste-check" id="notionBtn" onclick="sendToNotion()">Send to Notion</button>${message ? `<span class="toolbar-note">${esc(message)}</span>` : ''}`;
+  }
+
+  function trackSlotHtml(tracker) {
+    if (tracker) {
+      return `<button type="button" class="paste-check" onclick="stopTrack()">Tracking · next run ${esc(tracker.next_run ? localDate(tracker.next_run) : 'soon')} · Stop</button>`;
+    }
+    return '<button type="button" class="paste-check" onclick="startTrack()">Track this question monthly</button>';
+  }
+
+  function renderToolbar(data) {
+    document.getElementById('reportToolbar').innerHTML = `
+      <button type="button" class="paste-check" onclick="downloadReport()">Download</button>
+      <span id="notionSlot">${notionSlotHtml(data.notion_url)}</span>
+      <span id="trackSlot">${trackSlotHtml(data.tracker)}</span>
+      <button type="button" class="paste-check" id="copyBtn" onclick="copyLink()">Copy link</button>`;
+  }
+
+  async function sendToNotion() {
+    if (!currentReport) return;
+    const slot = document.getElementById('notionSlot');
+    const btn = document.getElementById('notionBtn');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const r = await api('POST', `/reports/${encodeURIComponent(currentReport.saved.id)}/notion`);
+      currentReport.notion_url = r.url;
+      slot.innerHTML = notionSlotHtml(r.url);
+    } catch (err) {
+      slot.innerHTML = notionSlotHtml(null, err.message);
+    }
+  }
+
+  async function startTrack() {
+    if (!currentReport) return;
+    try {
+      const r = await api('POST', `/reports/${encodeURIComponent(currentReport.saved.id)}/track`);
+      currentReport.tracker = r.tracker;
+      document.getElementById('trackSlot').innerHTML = trackSlotHtml(r.tracker);
+    } catch (err) {
+      showError(`Something went wrong: ${err.message}`);
+    }
+  }
+
+  async function stopTrack() {
+    if (!currentReport || !currentReport.tracker) return;
+    try {
+      await api('DELETE', '/trackers/' + encodeURIComponent(currentReport.tracker.id));
+      currentReport.tracker = null;
+      document.getElementById('trackSlot').innerHTML = trackSlotHtml(null);
+    } catch (err) {
+      showError(`Something went wrong: ${err.message}`);
+    }
+  }
+
+  async function copyLink() {
+    const btn = document.getElementById('copyBtn');
+    try {
+      await navigator.clipboard.writeText(location.href);
+      btn.textContent = 'Copied';
+    } catch (e) {
+      btn.textContent = 'Copy failed';
+    }
+    setTimeout(() => { btn.textContent = 'Copy link'; }, 1500);
+  }
+
+  // ── COMPARE + DEEP DIVE BANNERS ──
+  function renderCompare(c) {
+    const slot = document.getElementById('compareSlot');
+    if (!c) { slot.innerHTML = ''; return; }
+    const line = text => `<div class="mini-item">${text}</div>`;
+    const lines = [line(`${esc(c.new_quotes || 0)} new quotes`)];
+    if ((c.new_ideas || []).length) lines.push(line(`New ideas: ${esc(c.new_ideas.join(', '))}`));
+    if ((c.gone_ideas || []).length) lines.push(line(`No longer showing: ${esc(c.gone_ideas.join(', '))}`));
+    (c.new_quote_examples || []).slice(0, 3).forEach(q => {
+      lines.push(`<div class="quote"><div class="quote-text">“${esc(q.quote)}”</div><div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div></div>`);
+    });
+    if (c.previous_id) lines.push(line(`<a href="#report=${esc(encodeURIComponent(c.previous_id))}">Open the previous report</a>`));
+    slot.innerHTML = `
+      <div class="mini-card" style="margin-bottom:20px;">
+        <div class="mini-card-title">What changed since ${esc(c.previous_date ? new Date(c.previous_date).toLocaleDateString() : 'the last report')}</div>
+        <div class="mini-list">${lines.join('')}</div>
+      </div>`;
+  }
+
+  function renderDeepBanner(data) {
+    const el = document.getElementById('deepBanner');
+    const saved = data.saved || {};
+    if (saved.kind !== 'deep') { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.innerHTML = `<span>Deep dive on: <strong>${esc((data.focus && data.focus.name) || '')}</strong></span>${saved.parent_id ? ` <a href="#report=${esc(encodeURIComponent(saved.parent_id))}">Back to the original report</a>` : ''}`;
+    el.style.display = 'flex';
+  }
+
+  // ── RESET ──
+  function showHome() {
+    pollToken++;
+    currentReport = null;
+    currentReportId = null;
+    setView('home');
+    document.getElementById('errorBox').classList.remove('visible');
+    loadPastReports();
+    loadSpending();
+  }
+
+  function resetUI() {
+    history.replaceState(null, '', location.pathname + location.search);
+    showHome();
     document.getElementById('prompt').value = '';
     document.getElementById('pasteReddit').value = '';
     document.getElementById('pasteFacebook').value = '';
@@ -1101,58 +1521,88 @@
     document.getElementById('prompt').focus();
   }
 
+  // ── BACKGROUND JOBS ──
+  async function startJob(method, url, body) {
+    document.getElementById('errorBox').classList.remove('visible');
+    resetSteps();
+    setView('loading');
+    try {
+      const r = await api(method, url, body);
+      pollJob(r.job_id);
+    } catch (err) {
+      setView(currentReport ? 'results' : 'home');
+      showError(`Something went wrong: ${err.message}`);
+      loadSpending();
+    }
+  }
+
+  async function pollJob(jobId) {
+    const token = ++pollToken;
+    let failures = 0;
+    while (token === pollToken) {
+      await new Promise(r => setTimeout(r, 2000));
+      if (token !== pollToken) return;
+      let job;
+      try {
+        job = await api('GET', '/jobs/' + encodeURIComponent(jobId));
+        failures = 0;
+      } catch (err) {
+        if (++failures >= 5) {
+          setView(currentReport ? 'results' : 'home');
+          showError(`Lost contact with the server: ${err.message}`);
+          return;
+        }
+        continue;
+      }
+      if (job.status === 'running') {
+        updateSteps(job);
+      } else if (job.status === 'done') {
+        pollToken++;
+        loadSpending();
+        if (job.report_id) {
+          currentReportId = null;
+          if (hashReportId() === job.report_id) loadReport(job.report_id);
+          else location.hash = '#report=' + encodeURIComponent(job.report_id);
+        } else {
+          setView('home');
+        }
+        return;
+      } else {
+        pollToken++;
+        setView(currentReport ? 'results' : 'home');
+        showError(`Something went wrong: ${job.error || 'The run failed.'}`);
+        loadSpending();
+        return;
+      }
+    }
+  }
+
   // ── MAIN RUN ──
-  async function runResearch() {
+  function runResearch() {
     const prompt = document.getElementById('prompt').value.trim();
     if (!prompt) {
       document.getElementById('prompt').focus();
       return;
     }
-
-    // UI state
-    document.getElementById('runBtn').disabled = true;
-    document.getElementById('results').classList.remove('visible');
-    document.getElementById('errorBox').classList.remove('visible');
-    document.getElementById('loading').classList.add('visible');
-    animateSteps();
-
-    const start = Date.now();
-
-    try {
-      const res = await fetch('/research', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          pasted: {
-            reddit: document.getElementById('pasteReddit').value,
-            facebook: document.getElementById('pasteFacebook').value,
-          },
-        })
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Server error' }));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      const elapsed = ((Date.now() - start) / 1000).toFixed(0);
-
-      completeSteps();
-      document.getElementById('loading').classList.remove('visible');
-      document.getElementById('results').classList.add('visible');
-      renderResults(data, prompt, elapsed);
-
-    } catch (err) {
-      completeSteps();
-      document.getElementById('loading').classList.remove('visible');
-      document.getElementById('runBtn').disabled = false;
-      const box = document.getElementById('errorBox');
-      box.textContent = `Something went wrong: ${err.message}`;
-      box.classList.add('visible');
-    }
+    currentReport = null;
+    startJob('POST', '/jobs', {
+      prompt,
+      pasted: {
+        reddit: document.getElementById('pasteReddit').value,
+        facebook: document.getElementById('pasteFacebook').value,
+      },
+    });
   }
+
+  function digDeeper(idx) {
+    if (!currentReport) return;
+    startJob('POST', `/reports/${encodeURIComponent(currentReport.saved.id)}/deeper`, {index: idx});
+  }
+
+  // ── STARTUP ──
+  loadSpending();
+  if (hashReportId()) loadReport(hashReportId());
+  else loadPastReports();
 
   // Allow Cmd+Enter / Ctrl+Enter to submit
   document.getElementById('prompt').addEventListener('keydown', e => {

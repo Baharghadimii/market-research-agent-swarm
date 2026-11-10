@@ -12,6 +12,18 @@ A planner-executor AI system that finds market gaps for any product, service, or
 
 Reddit, Facebook and Discord can't be read, and every report says so. Each report lists Reddit threads worth reading, found through Google. Whole Reddit or Facebook pages (Cmd+A, Cmd+C) can be pasted in; code strips the page clutter and detects comment authors before the cheapest model reads them. Pasted comments go through the same quote checks but are labelled as pasted, because their origin can't be confirmed, and they cannot raise an idea's ranking. YouTube needs a free `YOUTUBE_API_KEY`; `GITHUB_TOKEN` is optional and raises GitHub's rate limit.
 
+## Using it
+
+- **Live progress** shows what each step is doing while a report runs.
+- **Saved reports** stay on the server. Open past reports from the home screen, share a report's link, or delete it.
+- **What changed:** a rerun of the same question shows new quotes and ideas that appeared or disappeared since the last run.
+- **Dig deeper** on any idea runs a focused second pass on just that idea.
+- **Track monthly** reruns a question every 30 days (public sources only, since pasted comments aren't stored).
+- **Signs people would pay** flags quotes where people mention what they pay, say they'd pay, or describe switching products.
+- **Competitor strength** shows App Store ratings, rating counts and prices for products that already exist.
+- **Download** saves a report as Markdown; **Send to Notion** adds it to a Swarm Reports database (needs `NOTION_API_KEY` and `NOTION_PARENT_PAGE_ID`).
+- **Daily spending limit:** runs are refused once the day's spending would pass `DAILY_LIMIT_USD` (default $3, Vancouver time). Reports, spending and trackers are stored in `data/swarm.db`.
+
 ## Architecture
 
 ```
@@ -22,6 +34,9 @@ server.py                      Flask backend, full pipeline lives here
 ├── run_synthesizer()           Sonnet makes the final call
 tools/
 ├── evidence.py                 public-API connectors, quote checks, people counts
+├── store.py                    saved reports, daily spending, trackers (SQLite)
+├── compare.py                  what changed between two runs of a question
+├── notion_export.py            send a report to a Notion database
 └── search.py                   Serper web search tool
 model_config.json               model lists + fallback chains (see below)
 static/                         frontend UI

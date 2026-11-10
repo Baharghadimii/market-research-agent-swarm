@@ -29,19 +29,27 @@ MAX_QUOTES_SHOWN = 8
 MIN_QUOTE_CHARS = 15
 
 # Fixed list, because the planner is a model and must not choose arbitrary hosts
-# for the server to call. Every host here answered /search.json on 2026-11-09.
-DISCOURSE_FORUMS = (
-    "community.fly.io",
-    "community.home-assistant.io",
-    "community.make.com",
-    "community.n8n.io",
-    "community.openai.com",
-    "forum.bubble.io",
-    "forum.cursor.com",
-    "forum.freecodecamp.org",
-    "forum.obsidian.md",
-    "replit.discourse.group",
-)
+# for the server to call. Every host answered /search.json and had posts in the
+# last day when checked on 2026-11-09 and 2026-11-10.
+FORUM_TOPICS = {
+    "community.fly.io": "app hosting",
+    "community.home-assistant.io": "smart home",
+    "community.make.com": "no-code automation",
+    "community.n8n.io": "workflow automation",
+    "community.openai.com": "AI developers",
+    "forum.bubble.io": "no-code app builders",
+    "forum.cursor.com": "AI coding",
+    "forum.freecodecamp.org": "people learning to code",
+    "forum.obsidian.md": "note-taking",
+    "replit.discourse.group": "app builders",
+    "community.monzo.com": "UK banking and personal finance",
+    "community.wanikani.com": "learning Japanese",
+    "discuss.pixls.us": "photography and photo editing",
+    "forum.literatureandlatte.com": "writers and novelists",
+    "community.glowforge.com": "laser cutting makers and small craft businesses",
+    "goingtoseed.discourse.group": "gardening and seed saving",
+}
+DISCOURSE_FORUMS = tuple(FORUM_TOPICS)
 
 NOT_SEARCHED = [
     "Reddit (no approved API access)",
@@ -50,6 +58,7 @@ NOT_SEARCHED = [
 ]
 
 EVIDENCE_KINDS = ("complaint", "wish", "workaround")
+PAY_KINDS = ("pays_now", "would_pay", "switched")
 
 # Sites with no approved API. A person can browse them and paste what they find.
 PASTED_SOURCES = {
@@ -425,36 +434,47 @@ def github_issues(query: str, limit: int = 25) -> list:
     return items
 
 
-def app_store_reviews(query: str, apps: int = 2, max_rating: int = 3) -> list:
+def app_store_reviews(query: str, apps: int = 2, max_rating: int = 3,
+                      countries: tuple = ("us", "ca", "gb")) -> list:
+    """1-3 star reviews from several countries' stores. The same review can appear
+    in more than one store, so reviews are de-duplicated by author and text."""
     found = _get(
         "https://itunes.apple.com/search",
         {"term": query, "entity": "software", "country": "us", "limit": apps},
     )
-    items = []
+    items, seen = [], set()
     since = _cutoff().strftime("%Y-%m-%d")
     for app in found.get("results", [])[:apps]:
-        feed = _get(
-            f"https://itunes.apple.com/us/rss/customerreviews/id={int(app['trackId'])}/sortBy=mostRecent/json"
-        )
-        entries = feed.get("feed", {}).get("entry", [])
-        entries = [entries] if isinstance(entries, dict) else entries
-        for entry in entries:
-            rating = int(entry.get("im:rating", {}).get("label", 5))
-            created = entry.get("updated", {}).get("label", "")[:10]
-            if rating > max_rating or created < since:
-                continue
-            headline = entry.get("title", {}).get("label", "")
-            body = entry.get("content", {}).get("label", "")
-            items.append(
-                Item(
-                    platform="App Store",
-                    author=entry.get("author", {}).get("name", {}).get("label", ""),
-                    text=f"{headline}. {body}",
-                    url=app.get("trackViewUrl", ""),
-                    created=created,
-                    title=f"{app.get('trackName', '')} ({rating} stars)",
+        track_id = int(app["trackId"])
+        for country in countries:
+            try:
+                feed = _get(f"https://itunes.apple.com/{country}/rss/customerreviews/id={track_id}/sortBy=mostRecent/json")
+            except requests.HTTPError:
+                continue  # the app is not sold in that country
+            entries = feed.get("feed", {}).get("entry", [])
+            entries = [entries] if isinstance(entries, dict) else entries
+            for entry in entries:
+                rating = int(entry.get("im:rating", {}).get("label", 5))
+                created = entry.get("updated", {}).get("label", "")[:10]
+                if rating > max_rating or created < since:
+                    continue
+                headline = entry.get("title", {}).get("label", "")
+                body = entry.get("content", {}).get("label", "")
+                author = entry.get("author", {}).get("name", {}).get("label", "")
+                key = (author, normalize(body)[:200])
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    Item(
+                        platform="App Store",
+                        author=author,
+                        text=f"{headline}. {body}",
+                        url=f"https://apps.apple.com/{country}/app/id{track_id}",
+                        created=created,
+                        title=f"{app.get('trackName', '')} ({rating} stars, {country.upper()} store)",
+                    )
                 )
-            )
     return items
 
 
@@ -488,6 +508,70 @@ def discourse_posts(forum: str, query: str, topics: int = 8, posts_per_topic: in
                     title=thread.get("title", ""),
                 )
             )
+    return items
+
+
+def lemmy_comments(query: str, limit: int = 30) -> list:
+    """Comments on Lemmy, an open, Reddit-like network, through lemmy.world's public API."""
+    data = _get(
+        "https://lemmy.world/api/v3/search",
+        {"q": query, "type_": "Comments", "sort": "TopYear", "limit": limit},
+    )
+    items = []
+    for row in data.get("comments", []):
+        comment, creator = row.get("comment") or {}, row.get("creator") or {}
+        if comment.get("removed") or comment.get("deleted") or creator.get("bot_account"):
+            continue
+        text = re.sub(r"(?m)^\s*>.*$", " ", comment.get("content") or "")  # drop text quoted from others
+        items.append(
+            Item(
+                platform="Lemmy",
+                author=creator.get("actor_id") or creator.get("name", ""),
+                text=re.sub(r"\s+", " ", text).strip(),
+                url=comment.get("ap_id", ""),
+                created=(comment.get("published") or "")[:10],
+                title=(row.get("post") or {}).get("name", ""),
+            )
+        )
+    return items
+
+
+def github_discussions(query: str, limit: int = 20) -> list:
+    """GitHub Discussions threads. GitHub only allows this search with a token."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise SourceSkipped("GITHUB_TOKEN is not set")
+    since = _cutoff().strftime("%Y-%m-%d")
+    graphql = (
+        "query($q: String!, $n: Int!) { search(query: $q, type: DISCUSSION, first: $n) { nodes { "
+        "... on Discussion { title body url createdAt author { login } answer { id } } } } }"
+    )
+    resp = requests.post(
+        "https://api.github.com/graphql",
+        json={"query": graphql, "variables": {"q": f"{query} created:>{since}", "n": limit}},
+        headers={"User-Agent": USER_AGENT, "Authorization": f"Bearer {token}"},
+        timeout=TIMEOUT_SEC,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errors"):
+        raise RuntimeError(data["errors"][0].get("message", "GitHub GraphQL error"))
+    items = []
+    for node in ((data.get("data") or {}).get("search") or {}).get("nodes") or []:
+        if not node or not node.get("url"):
+            continue
+        body = re.sub(r"\s+", " ", node.get("body") or "")
+        items.append(
+            Item(
+                platform="GitHub Discussions",
+                author=(node.get("author") or {}).get("login", ""),
+                text=f"{node.get('title', '')}. {body}".strip(),
+                url=node["url"],
+                created=(node.get("createdAt") or "")[:10],
+                status="answered" if node.get("answer") else "open",
+                title=node.get("title", ""),
+            )
+        )
     return items
 
 
@@ -547,6 +631,10 @@ def _dispatch(spec: dict) -> list:
         return discourse_posts(spec.get("forum", ""), query)
     if kind == "youtube_comments":
         return youtube_comments(query)
+    if kind == "lemmy_comments":
+        return lemmy_comments(query)
+    if kind == "github_discussions":
+        return github_discussions(query)
     raise ValueError(f"unknown connector type: {kind!r}")
 
 
@@ -573,6 +661,39 @@ def run_connectors(specs: list) -> tuple:
             print(f"[WARN] connector failed {entry}", flush=True)
         log.append(entry)
     return items, log
+
+
+def strength_label(ratings: int) -> str:
+    """How entrenched an app is, judged by how many people have rated it."""
+    if ratings >= 50000:
+        return "Dominant"
+    if ratings >= 5000:
+        return "Established"
+    if ratings > 0:
+        return "Small"
+    return "Unknown"
+
+
+def app_store_strength(name: str):
+    """Rating, rating count and price of the App Store app matching a product name."""
+    want = normalize(name)
+    if len(want) < 3:
+        return None
+    found = _get("https://itunes.apple.com/search", {"term": name, "entity": "software", "country": "us", "limit": 3})
+    for app in found.get("results", []):
+        title = normalize(app.get("trackName", ""))
+        if title == want or title.startswith(want + " ") or title.startswith(want + ":") or \
+                re.split(r"[:\-–]", title)[0].strip() == want:
+            count = int(app.get("userRatingCount") or 0)
+            return {
+                "app_name": app.get("trackName", ""),
+                "app_rating": round(float(app.get("averageUserRating") or 0), 1),
+                "app_ratings": count,
+                "price": app.get("formattedPrice", ""),
+                "app_url": app.get("trackViewUrl", ""),
+                "strength": strength_label(count),
+            }
+    return None
 
 
 def assign_ids(items_by_brief: dict) -> dict:
@@ -613,6 +734,7 @@ def verify_extractions(extractions: list, store: dict) -> tuple:
                 "quote": quote,
                 "kind": kind,
                 "theme": (entry.get("theme") or "").strip()[:80],
+                "pay": entry.get("pay") if entry.get("pay") in PAY_KINDS else "none",
             }
     return verified, counts
 
@@ -650,6 +772,7 @@ def evidence_stats(ids: list, verified: dict) -> dict:
         "pasted": people - checked_people,
         "checked_level": checked_level if checked_people else "None",
         "checked_people": checked_people,
+        "paying": len({person_key(r) for r in rows if r.get("pay", "none") != "none"}),
         "mentions": len(rows),
         "platforms": platforms,
         "open": sum(r["status"] == "open" for r in rows),
@@ -666,7 +789,7 @@ def _quotes_for_display(ids: list, verified: dict) -> list:
         (rest if key in seen else first).append(i)
         seen.add(key)
     return [
-        {k: verified[i][k] for k in ("id", "quote", "platform", "url", "created", "status", "kind", "theme")}
+        {k: verified[i].get(k, "") for k in ("id", "quote", "platform", "url", "created", "status", "kind", "theme", "pay")}
         for i in (first + rest)[:MAX_QUOTES_SHOWN]
     ]
 
@@ -700,6 +823,14 @@ def apply_evidence(report: dict, verified: dict) -> dict:
         stats = evidence_stats(ids, verified)
         opp["evidence_strength"] = stats
         opp["evidence"] = _quotes_for_display(ids, verified)
+        pay_ids = [i for i in ids if verified[i].get("pay", "none") != "none"]
+        opp["pay_signals"] = {
+            "people": stats["paying"],
+            "quotes": [
+                {k: verified[i].get(k, "") for k in ("quote", "platform", "url", "created", "pay")}
+                for i in pay_ids[:3]
+            ],
+        }
         opp["signal_convergence"] = (
             f"{len(stats['platforms'])}/{len(run_platforms)} platforms: "
             f"{', '.join(stats['platforms'])} · {stats['people']} different people"
@@ -781,6 +912,7 @@ def coverage_summary(connector_logs: list, store: dict, verified: dict, counts: 
         "quotes_verified": len(verified),
         "quotes_rejected": counts.get("rejected_unverified", 0),
         "sellers_filtered": counts.get("filtered_sellers", 0),
+        "pay_quotes": sum(r.get("pay", "none") != "none" for r in verified.values()),
         "people": len({person_key(r) for r in verified.values()}),
         "connectors": connector_logs,
         "not_searched": not_searched,

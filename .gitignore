@@ -21,3 +21,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Saved reports, spending and trackers (SQLite)
+data/
