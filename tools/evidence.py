@@ -893,6 +893,19 @@ def apply_evidence(report: dict, verified: dict) -> dict:
     watch = report.get("watch_list") or []
     report["watch_list"] = watch + [f"{n} — removed: no verified quote supports it" for n in dropped]
 
+    if not original:
+        # The synthesizer itself found nothing worth recommending. Keep its own
+        # explanation: that is a finding, not a failure of the quote checks.
+        call = report.get("the_call") or {}
+        if not call.get("recommended_focus"):
+            call["recommended_focus"] = "No opportunity here was strong enough to recommend."
+        report["the_call"] = call
+        report["evidence_notice"] = (
+            "The swarm found no opportunity worth recommending. The watch list, contradictions "
+            "and exclusions explain why, and any leads worth testing."
+        )
+        return report
+
     if not kept:
         report["the_call"] = {
             "recommended_focus": "Cannot make a call: no opportunity had verified quotes from real people.",

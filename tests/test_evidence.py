@@ -372,3 +372,13 @@ def test_hn_hiring_threads_are_skipped(monkeypatch):
     ]}
     monkeypatch.setattr(evidence, "_get", lambda *a, **k: hits)
     assert [i.author for i in evidence.hn_comments("deploy")] == ["b"]
+
+
+
+def test_a_deliberate_no_is_reported_as_a_finding():
+    report = {"the_call": {"recommended_focus": "Don't build this: banks block it."},
+              "opportunities": [], "watch_list": ["CSV import tool"]}
+    out = apply_evidence(report, {"E1": row("E1")})
+    assert out["the_call"]["recommended_focus"] == "Don't build this: banks block it."
+    assert "found no opportunity worth recommending" in out["evidence_notice"]
+    assert out["watch_list"] == ["CSV import tool"]
