@@ -16,6 +16,7 @@ import os
 import json
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -97,7 +98,7 @@ FLASH  = FLASH_MODELS[0]
 MAX_RESEARCHERS = 6
 MIN_RESEARCHERS = 3
 FORUM_LIST = "; ".join(f"{host} ({topic})" for host, topic in FORUM_TOPICS.items())
-MAX_ITEMS_PER_EXTRACTION = 45
+MAX_ITEMS_PER_EXTRACTION = 30  # smaller batches: answers stop getting cut off at the length limit
 MAX_QUOTES_TO_SYNTHESIZER = 150
 MAX_LEADS_CHARS = 1500
 
@@ -356,18 +357,20 @@ Rules:
   or "none". Only use a value other than "none" when the quote itself shows it.
 - Skip anything off topic, and anything that reads as a generated list or catalogue rather than a person's own experience.
 - Returning few or no entries is the correct answer for weak data.
-- At most 40 entries."""
+- At most 25 entries."""
 
-# The cheap model rate-limits bursts. Big runs can have a dozen batches, so read
-# at most four at a time, and give a batch a second try before giving up on it.
-EXTRACTION_SLOTS = threading.Semaphore(4)
+# The cheap model rate-limits bursts, so read at most six batches at a time.
+# A batch that fails for any reason (cut-off answer, rate limit) gets one more
+# try after a short pause, because a lost batch means lost evidence.
+EXTRACTION_SLOTS = threading.Semaphore(6)
 
 def extract_one(brief: dict, items: list, prompt: str):
     with EXTRACTION_SLOTS:
         try:
             return _extract_once(brief, items, prompt)
-        except (json.JSONDecodeError, ValueError):
-            time.sleep(2)
+        except Exception as e:
+            print(f"[WARN] extraction batch failed ({type(e).__name__}), retrying once", flush=True)
+            time.sleep(3)
             return _extract_once(brief, items, prompt)
 
 def _extract_once(brief: dict, items: list, prompt: str):
@@ -385,7 +388,7 @@ def _extract_once(brief: dict, items: list, prompt: str):
             {"role": "system", "content": EXTRACTOR_PROMPT},
             {"role": "user",   "content": user}
         ],
-        max_tokens=3500,
+        max_tokens=5000,
         temperature=0.1
     )
     raw = response.choices[0].message.content.strip()
@@ -554,7 +557,8 @@ def check_one_solution(opp: dict):
     # How strong is each competitor? App Store numbers where the product is an app,
     # plus any rating Google shows next to the result.
     by_link = {r["link"]: r for r in results}
-    for product in products:
+
+    def look_up(product):
         result = by_link.get(product.get("url"), {})
         if result.get("rating"):
             product["web_rating"] = result.get("rating")
@@ -565,6 +569,9 @@ def check_one_solution(opp: dict):
             print(f"[WARN] app lookup failed for {product.get('name')!r}: {type(e).__name__}", flush=True)
             app = None
         product.update(app or {"strength": "Unknown"})
+
+    with ThreadPoolExecutor(max_workers=4) as pool:  # look up all products at once
+        list(pool.map(look_up, products))
     return {"verdict": verdict, "note": parsed.get("note", ""), "products": products,
             "basis": "Google results only"}, estimate_cost(model_used, SOLUTIONS_PROMPT + user, raw)
 
@@ -661,14 +668,29 @@ def research_goal(prompt: str, focus: dict = None) -> str:
 
 def run_pipeline(prompt: str, pasted=None, focus: dict = None, cost: RunCost = None, progress=None) -> dict:
     cost = cost or RunCost()
-    say = progress or (lambda stage, detail="": None)
     goal = research_goal(prompt, focus)
+    timings, clock = {}, {"stage": None, "since": time.time()}
+
+    def say(stage, detail=""):
+        # Record how long each stage took, so slow runs can be explained.
+        if stage != clock["stage"]:
+            if clock["stage"]:
+                timings[clock["stage"]] = round(time.time() - clock["since"], 1)
+            clock.update(stage=stage, since=time.time())
+        if progress:
+            progress(stage, detail)
 
     say("plan", "Choosing where to look")
     plan, c = run_planner(goal)
     cost.add(c)
     domain      = plan.get("domain", "Market Research")
     researchers = plan.get("researchers", [])
+
+    # The Reddit thread search only needs the plan, so it runs alongside everything else.
+    threads_found = {}
+    thread_search = threading.Thread(
+        target=lambda: threads_found.update(result=find_reddit_threads(plan, prompt)), daemon=True)
+    thread_search.start()
 
     say("read", f"Reading posts and comments from {len(researchers)} sources")
     researcher_results = run_researchers_parallel(
@@ -691,10 +713,14 @@ def run_pipeline(prompt: str, pasted=None, focus: dict = None, cost: RunCost = N
 
     say("extras", "Checking competitors and finding Reddit threads")
     cost.add(check_existing_solutions(report["opportunities"]))
-    report["reddit_threads"] = find_reddit_threads(plan, prompt)
+    thread_search.join(timeout=60)
+    report["reddit_threads"] = threads_found.get("result", [])
 
     connector_logs = [e for d in researcher_results.values() for e in d["connector_log"]]
     report["evidence_coverage"] = coverage_summary(connector_logs + extract_failures, fetched, verified, counts)
+    if clock["stage"]:
+        timings[clock["stage"]] = round(time.time() - clock["since"], 1)
+    report["timings"] = timings
     report["cost_usd"] = round(cost.total, 4)
     report["sources_used"] = len(researchers)
     report["planner_thinking"] = plan.get("thinking", "")

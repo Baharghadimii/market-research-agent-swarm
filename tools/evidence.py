@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
 import requests
+from concurrent.futures import ThreadPoolExecutor
 
 USER_AGENT = "market-research-swarm/1.0"
 TIMEOUT_SEC = 20
@@ -638,29 +639,41 @@ def _dispatch(spec: dict) -> list:
     raise ValueError(f"unknown connector type: {kind!r}")
 
 
+def _run_one_connector(spec: dict) -> tuple:
+    entry = {
+        "type": spec.get("type"),
+        "target": spec.get("forum") or spec.get("site") or "",
+        "query": spec.get("query", ""),
+        "status": "ok",
+        "items": 0,
+        "detail": "",
+        "seconds": 0.0,
+    }
+    started, found = time.time(), []
+    try:
+        found = [i for i in _dispatch(spec) if i.text and i.url.startswith("https://")]
+        entry["items"] = len(found)
+    except SourceSkipped as e:
+        entry.update(status="skipped", detail=str(e))
+    except Exception as e:
+        entry.update(status="failed", detail=f"{type(e).__name__}: {e}"[:200])
+        print(f"[WARN] connector failed {entry}", flush=True)
+    entry["seconds"] = round(time.time() - started, 1)
+    return found, entry
+
+
 def run_connectors(specs: list) -> tuple:
-    """Run a brief's connectors. Failures are recorded and returned, never hidden."""
-    items, log = [], []
-    for spec in (specs or [])[:MAX_CONNECTORS_PER_BRIEF]:
-        entry = {
-            "type": spec.get("type"),
-            "target": spec.get("forum") or spec.get("site") or "",
-            "query": spec.get("query", ""),
-            "status": "ok",
-            "items": 0,
-            "detail": "",
-        }
-        try:
-            found = [i for i in _dispatch(spec) if i.text and i.url.startswith("https://")]
-            entry["items"] = len(found)
-            items.extend(found)
-        except SourceSkipped as e:
-            entry.update(status="skipped", detail=str(e))
-        except Exception as e:
-            entry.update(status="failed", detail=f"{type(e).__name__}: {e}"[:200])
-            print(f"[WARN] connector failed {entry}", flush=True)
-        log.append(entry)
-    return items, log
+    """Run a brief's connectors at the same time. Failures are recorded, never hidden.
+
+    Results keep the planner's order, so the same plan gives the same item order.
+    """
+    specs = (specs or [])[:MAX_CONNECTORS_PER_BRIEF]
+    if not specs:
+        return [], []
+    with ThreadPoolExecutor(max_workers=len(specs)) as pool:
+        results = list(pool.map(_run_one_connector, specs))
+    items = [item for found, _ in results for item in found]
+    return items, [entry for _, entry in results]
 
 
 def strength_label(ratings: int) -> str:
