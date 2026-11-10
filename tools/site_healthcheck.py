@@ -32,7 +32,7 @@ from tools.email_alert import send_alert as _send_alert
 
 API_URL     = "http://127.0.0.1:5000/research"
 TEST_PROMPT = "Automated health check: gaps in baby sleep products for the Canadian market"
-TIMEOUT_SEC = 240  # full pipeline (planner -> research -> summarize -> synthesize) can take a couple minutes
+TIMEOUT_SEC = 480  # a full run reads hundreds of comments; rate limits can stretch it past 5 minutes
 
 LOG_PATH = os.path.join(REPO_ROOT, "healthcheck.log")
 
@@ -97,7 +97,7 @@ def main():
             subject="Swarm Research is broken",
             body=(
                 f"The daily health check for Swarm Research "
-                f"(http://209.250.232.171:5000/) failed.\n\n"
+                f"(https://209-250-232-171.sslip.io/) failed.\n\n"
                 f"Detail:\n{detail}\n\n"
                 f"Check on the VPS:\n"
                 f"  pm2 logs swarm-research\n"
