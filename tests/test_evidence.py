@@ -347,3 +347,28 @@ def test_app_match_needs_the_same_website(monkeypatch):
     assert found["app_ratings"] == 1200 and found["strength"] == "Small"
     assert evidence.app_store_strength("Otter", "https://unrelated.example/otter") is None
     assert evidence.app_store_strength("Otter") is None  # no website and no exact name: don't guess
+
+
+
+def test_offers_to_do_the_work_are_sellers():
+    for text in (
+        "I also fix and finish apps built with Lovable, Bolt, Cursor or Replit (auth, Supabase RLS, deploy issues)",
+        "Location: Dubai. Remote: Yes. Willing to relocate: No. Technologies: Next.js",
+        "We help founders take their ideas built on lovable from scaffolding to production",
+        "helping founders take their ideas built on platforms like v0.dev to production",
+    ):
+        assert evidence.is_promotional(text), text
+    for text in (
+        "I built an app with Lovable and now Stripe keeps failing for my customers",
+        "I fixed it myself after three days but I would have paid someone to do it",
+    ):
+        assert not evidence.is_promotional(text), text
+
+
+def test_hn_hiring_threads_are_skipped(monkeypatch):
+    hits = {"hits": [
+        {"objectID": "1", "author": "a", "comment_text": "SEEKING WORK, I fix apps", "story_title": "Ask HN: Who wants to be hired? (November 2026)"},
+        {"objectID": "2", "author": "b", "comment_text": "Deploying my app broke twice", "story_title": "Show HN: My deploy tool"},
+    ]}
+    monkeypatch.setattr(evidence, "_get", lambda *a, **k: hits)
+    assert [i.author for i in evidence.hn_comments("deploy")] == ["b"]

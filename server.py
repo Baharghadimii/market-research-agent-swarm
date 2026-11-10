@@ -351,6 +351,9 @@ Rules:
   No ellipses, no edits, no joining separate sentences from different places.
 - "kind" is one of: complaint, wish, workaround, seller.
 - Use "seller" when the person is promoting their own product or services. Do not skip them.
+  Anyone offering to do the work counts as a seller, even when they describe the problem well:
+  freelancers, agencies, job seekers, and lines like "I help founders…", "I fix…", "we build…".
+  Only the person who has the problem is evidence of demand.
 - Use the same "theme" wording for items describing the same problem.
 - "pay" shows money behaviour in that quote: "pays_now" (mentions what they pay or spend today),
   "would_pay" (says they would pay for a fix), "switched" (cancelled, switched or gave up on a paid product),

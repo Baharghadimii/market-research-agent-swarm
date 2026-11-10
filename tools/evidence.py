@@ -74,9 +74,17 @@ MIN_PASTED_CHARS = 20
 _PROMO = re.compile(
     r"\b(hire me|seeking work|dm me|check out my|book a (call|demo)|promo code|"
     r"discount code|use code|free trial|we offer|we help|our agency|"
+    r"available for (hire|work|freelance|contract)|willing to relocate|remote:\s*(yes|no)|"
+    r"r[eé]sum[eé]\s*/\s*cv|"
+    r"(i|we) (also )?(fix|finish|build|rescue|audit|help)\b.{0,40}\b(apps?|founders|startups|teams|clients|projects)\b|"
+    r"helping (founders|startups|teams|businesses|clients)|"
     r"(i|we) (made|built|created)\b.{0,50}\b(to solve|that solves|to fix|that fixes|which solves))\b",
     re.IGNORECASE,
 )
+
+# Hacker News threads where people advertise themselves or jobs. Their comments
+# describe what someone sells or hires for, not a problem the writer has.
+_HN_JOB_THREADS = re.compile(r"who (wants to be|is) hired|seeking (work|freelancer)|freelancer\?", re.IGNORECASE)
 
 
 class SourceSkipped(Exception):
@@ -363,6 +371,7 @@ def hn_comments(query: str, limit: int = 30) -> list:
             title=h.get("story_title") or "",
         )
         for h in data.get("hits", [])
+        if not _HN_JOB_THREADS.search(h.get("story_title") or "")
     ]
 
 
