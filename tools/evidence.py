@@ -674,25 +674,47 @@ def strength_label(ratings: int) -> str:
     return "Unknown"
 
 
-def app_store_strength(name: str):
-    """Rating, rating count and price of the App Store app matching a product name."""
+def _site(url: str) -> str:
+    """example.com from https://www.example.com/path, for comparing who owns a site."""
+    host = re.sub(r"^https?://", "", (url or "").lower()).split("/")[0].split(":")[0]
+    return ".".join(host.split(".")[-2:]) if host.count(".") >= 1 else host
+
+
+def app_store_strength(name: str, product_url: str = ""):
+    """Rating, rating count and price of the App Store app for a product.
+
+    Names collide (a restaurant tool and a transcription app can both be "Otter"),
+    so an app only counts when its developer's website matches the product's site.
+    Without both websites, only an exact name match counts.
+    """
     want = normalize(name)
     if len(want) < 3:
         return None
-    found = _get("https://itunes.apple.com/search", {"term": name, "entity": "software", "country": "us", "limit": 3})
+    found = _get("https://itunes.apple.com/search", {"term": name, "entity": "software", "country": "us", "limit": 5})
+    product_site = _site(product_url) if product_url.startswith("https://") else ""
+    matches = []
     for app in found.get("results", []):
         title = normalize(app.get("trackName", ""))
-        if title == want or title.startswith(want + " ") or title.startswith(want + ":") or \
-                re.split(r"[:\-–]", title)[0].strip() == want:
-            count = int(app.get("userRatingCount") or 0)
-            return {
-                "app_name": app.get("trackName", ""),
-                "app_rating": round(float(app.get("averageUserRating") or 0), 1),
-                "app_ratings": count,
-                "price": app.get("formattedPrice", ""),
-                "app_url": app.get("trackViewUrl", ""),
-                "strength": strength_label(count),
-            }
+        named = title == want or title.startswith(want + " ") or title.startswith(want + ":") or \
+            re.split(r"[:\-–]", title)[0].strip() == want
+        seller_site = _site(app.get("sellerUrl") or "")
+        if product_site and seller_site:
+            if named and seller_site == product_site:
+                matches.append(app)
+        elif title == want:
+            matches.append(app)
+    if matches:
+        # A company can have several apps; its main one is the most rated.
+        app = max(matches, key=lambda a: int(a.get("userRatingCount") or 0))
+        count = int(app.get("userRatingCount") or 0)
+        return {
+            "app_name": app.get("trackName", ""),
+            "app_rating": round(float(app.get("averageUserRating") or 0), 1),
+            "app_ratings": count,
+            "price": app.get("formattedPrice", ""),
+            "app_url": app.get("trackViewUrl", ""),
+            "strength": strength_label(count),
+        }
     return None
 
 

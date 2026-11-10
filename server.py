@@ -560,7 +560,7 @@ def check_one_solution(opp: dict):
             product["web_rating"] = result.get("rating")
             product["web_rating_count"] = result.get("ratingCount")
         try:
-            app = app_store_strength(product.get("name", ""))
+            app = app_store_strength(product.get("name", ""), product.get("url", ""))
         except Exception as e:
             print(f"[WARN] app lookup failed for {product.get('name')!r}: {type(e).__name__}", flush=True)
             app = None

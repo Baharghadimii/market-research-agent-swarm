@@ -333,3 +333,17 @@ def test_reddit_threads_are_picked_from_search_results():
     threads = pick_reddit_threads(results)
     assert threads == [{"title": "Waitlist help", "subreddit": "r/speechdelays",
                         "url": "https://www.reddit.com/r/speechdelays/comments/abc123", "date": ""}]
+
+
+def test_app_match_needs_the_same_website(monkeypatch):
+    apps = {"results": [
+        {"trackName": "Otter Transcribe Voice Notes", "sellerUrl": "https://otter.ai", "userRatingCount": 90000,
+         "averageUserRating": 4.7, "formattedPrice": "Free", "trackViewUrl": "https://apps.apple.com/app/1"},
+        {"trackName": "Otter - Restaurant Manager", "sellerUrl": "https://www.tryotter.com/", "userRatingCount": 1200,
+         "averageUserRating": 4.5, "formattedPrice": "Free", "trackViewUrl": "https://apps.apple.com/app/2"},
+    ]}
+    monkeypatch.setattr(evidence, "_get", lambda *a, **k: apps)
+    found = evidence.app_store_strength("Otter", "https://www.tryotter.com/delivery")
+    assert found["app_ratings"] == 1200 and found["strength"] == "Small"
+    assert evidence.app_store_strength("Otter", "https://unrelated.example/otter") is None
+    assert evidence.app_store_strength("Otter") is None  # no website and no exact name: don't guess
