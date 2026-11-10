@@ -21,7 +21,7 @@ Reddit, Facebook and Discord can't be read, and every report says so. Each repor
 - **Track monthly** reruns a question every 30 days (public sources only, since pasted comments aren't stored).
 - **Signs people would pay** flags quotes where people mention what they pay, say they'd pay, or describe switching products.
 - **Competitor strength** shows App Store ratings, rating counts and prices for products that already exist.
-- **Download** saves a report as Markdown; **Send to Notion** adds it to a Swarm Reports database (needs `NOTION_API_KEY` and `NOTION_PARENT_PAGE_ID`).
+- **Notion copy:** every finished report, deep dive and tracked run is copied to a Swarm Reports database automatically, which doubles as a backup (needs `NOTION_API_KEY` and `NOTION_PARENT_PAGE_ID`; set `AUTO_NOTION=off` to stop it). **Download** saves a report as Markdown.
 - **Daily spending limit:** runs are refused once the day's spending would pass `DAILY_LIMIT_USD` (default $3, Vancouver time). Reports, spending and trackers are stored in `data/swarm.db`.
 
 ## Architecture

@@ -738,6 +738,55 @@ def run_pipeline(prompt: str, pasted=None, focus: dict = None, cost: RunCost = N
     return report
 
 # ────────────────────────────────────────────────
+# NOTION
+# Every finished report is copied to the Swarm Reports database, which also
+# serves as the backup of saved reports.
+# ────────────────────────────────────────────────
+class NotionNotSetUp(Exception):
+    pass
+
+NOTION_LOCK = threading.Lock()  # one send at a time, so a database is never created twice
+
+def notion_send(report_id: str, base_url: str) -> str:
+    """Copy a saved report to Notion once, and return the Notion page's URL."""
+    api_key, parent = os.environ.get("NOTION_API_KEY"), os.environ.get("NOTION_PARENT_PAGE_ID")
+    if not api_key or not parent:
+        raise NotionNotSetUp("Notion isn't set up on this server.")
+    with NOTION_LOCK:
+        existing = store.get_setting(f"notion:{report_id}")
+        if existing:
+            return existing
+        report = store.get_report(report_id)
+        report_url = f"{base_url}/#report={report_id}" if base_url else ""
+        database_id = store.get_setting("notion_database_id")
+        if not database_id:
+            database_id = create_database(api_key, parent)
+            store.set_setting("notion_database_id", database_id)
+        try:
+            page_url = send_report(api_key, database_id, report, report_url)
+        except NotionError as e:
+            # Only a missing database (deleted in Notion) earns a fresh one. Any other
+            # error would otherwise create a duplicate database on every attempt.
+            if "Notion error 404" not in str(e):
+                raise
+            database_id = create_database(api_key, parent)
+            store.set_setting("notion_database_id", database_id)
+            page_url = send_report(api_key, database_id, report, report_url)
+        store.set_setting(f"notion:{report_id}", page_url)
+        return page_url
+
+def auto_send_to_notion(report_id: str) -> None:
+    """Send a finished report to Notion. A failure is logged and the button stays."""
+    if os.environ.get("AUTO_NOTION", "on") == "off":
+        return
+    try:
+        notion_send(report_id, store.get_setting("public_base") or "")
+    except NotionNotSetUp:
+        pass
+    except Exception as e:
+        print(f"[WARN] automatic Notion send failed for {report_id}: {type(e).__name__}: {e}", flush=True)
+
+# ────────────────────────────────────────────────
 # JOBS
 # The page starts a run, then asks for progress every couple of seconds.
 # ────────────────────────────────────────────────
@@ -782,6 +831,8 @@ def start_job(prompt: str, pasted=None, focus: dict = None, parent_id: str = Non
             report_id = store.save_report(report, prompt, kind, parent_id)
             store.record_spend(cost.total, f"{kind}: {prompt[:80]}")  # before "done", so the page sees it
             cost.total = 0.0
+            progress("extras", "Saving a copy to Notion")
+            auto_send_to_notion(report_id)  # before "done", so the page shows the Notion link
             with JOBS_LOCK:
                 job.update(status="done", report_id=report_id, done_stages=list(JOB_STAGES))
         except Exception as e:
@@ -810,6 +861,7 @@ def run_due_trackers():
             report = run_pipeline(tracker["prompt"], cost=cost)
             report_id = store.save_report(report, tracker["prompt"], "tracked", tracker_id=tracker["id"])
             store.mark_tracker_run(tracker["id"], report_id)
+            auto_send_to_notion(report_id)
             print(f"[INFO] tracker {tracker['id']} ran, report {report_id}", flush=True)
         except Exception as e:
             print(f"[ERROR] tracker {tracker['id']} failed: {type(e).__name__}: {e}", flush=True)
@@ -832,6 +884,12 @@ def _public_base() -> str:
     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
     return f"{scheme}://{request.host}"
 
+def _remember_public_base() -> None:
+    """Remember the site's public address, so background runs can link back to it."""
+    base = _public_base()
+    if base.startswith("https://"):
+        store.set_setting("public_base", base)
+
 @app.route("/jobs", methods=["POST"])
 def create_job():
     body = request.get_json(silent=True) or {}
@@ -839,6 +897,7 @@ def create_job():
     if not prompt:
         return jsonify({"error": "Prompt is required"}), 400
     try:
+        _remember_public_base()
         return jsonify({"job_id": start_job(prompt[:2000], body.get("pasted"))}), 202
     except SpendingLimit as e:
         return jsonify({"error": str(e)}), 429
@@ -884,6 +943,7 @@ def report_deeper(report_id):
         return jsonify({"error": "Pick one of this report's opportunities"}), 400
     focus = {k: opps[index].get(k, "") for k in ("name", "what", "who")}
     try:
+        _remember_public_base()
         job_id = start_job(report["saved"]["prompt"], focus=focus, parent_id=report_id, kind="deep")
         return jsonify({"job_id": job_id}), 202
     except SpendingLimit as e:
@@ -903,32 +963,15 @@ def tracker_stop(tracker_id):
 
 @app.route("/reports/<report_id>/notion", methods=["POST"])
 def report_to_notion(report_id):
-    report = store.get_report(report_id)
-    if not report:
+    if not store.get_report(report_id):
         return jsonify({"error": "Report not found"}), 404
-    api_key, parent = os.environ.get("NOTION_API_KEY"), os.environ.get("NOTION_PARENT_PAGE_ID")
-    if not api_key or not parent:
-        return jsonify({"error": "Notion isn't set up on this server."}), 400
-    report_url = f"{_public_base()}/#report={report_id}"
+    _remember_public_base()
     try:
-        database_id = store.get_setting("notion_database_id")
-        if not database_id:
-            database_id = create_database(api_key, parent)
-            store.set_setting("notion_database_id", database_id)
-        try:
-            page_url = send_report(api_key, database_id, report, report_url)
-        except NotionError as e:
-            # Only a missing database (deleted in Notion) earns a fresh one. Any other
-            # error would otherwise create a duplicate database on every click.
-            if "Notion error 404" not in str(e):
-                raise
-            database_id = create_database(api_key, parent)
-            store.set_setting("notion_database_id", database_id)
-            page_url = send_report(api_key, database_id, report, report_url)
+        return jsonify({"url": notion_send(report_id, _public_base())})
+    except NotionNotSetUp as e:
+        return jsonify({"error": str(e)}), 400
     except NotionError as e:
         return jsonify({"error": str(e)}), 502
-    store.set_setting(f"notion:{report_id}", page_url)
-    return jsonify({"url": page_url})
 
 @app.route("/spending")
 def spending_status():

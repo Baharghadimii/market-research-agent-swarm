@@ -260,3 +260,35 @@ def test_notion_export_is_400_when_setup_is_missing(client, monkeypatch, present
 
     assert resp.status_code == 400
     assert "Notion" in resp.get_json()["error"]
+
+
+
+def test_finished_reports_go_to_notion_once(client, monkeypatch):
+    sent = []
+    monkeypatch.setenv("NOTION_API_KEY", "test-key")
+    monkeypatch.setenv("NOTION_PARENT_PAGE_ID", "parent-page")
+    monkeypatch.setattr(server, "create_database", lambda key, parent: "db-1")
+    monkeypatch.setattr(server, "send_report",
+                        lambda key, db, report, url: sent.append((db, url)) or f"https://notion.test/{len(sent)}")
+    r = client.post("/jobs", json={"prompt": "Notion test"},
+                    headers={"Host": "swarm.example", "X-Forwarded-Proto": "https"})
+    job = wait_job(client, r.get_json()["job_id"])
+    detail = client.get(f"/reports/{job['report_id']}").get_json()
+    assert detail["notion_url"] == "https://notion.test/1"
+    assert sent == [("db-1", f"https://swarm.example/#report={job['report_id']}")]
+    again = client.post(f"/reports/{job['report_id']}/notion").get_json()
+    assert again["url"] == "https://notion.test/1" and len(sent) == 1  # no duplicate page
+
+
+def test_notion_failure_does_not_break_a_run(client, monkeypatch):
+    monkeypatch.setenv("NOTION_API_KEY", "test-key")
+    monkeypatch.setenv("NOTION_PARENT_PAGE_ID", "parent-page")
+
+    def broken(*a, **k):
+        raise server.NotionError("Notion error 500: down")
+
+    monkeypatch.setattr(server, "create_database", broken)
+    r = client.post("/jobs", json={"prompt": "Notion down"})
+    job = wait_job(client, r.get_json()["job_id"])
+    assert job["status"] == "done"
+    assert client.get(f"/reports/{job['report_id']}").get_json()["notion_url"] is None
