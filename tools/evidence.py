@@ -462,6 +462,9 @@ def verify_extractions(extractions: list, store: dict) -> tuple:
     return verified, counts
 
 
+LEVEL_RANK = {"Strong": 3, "Moderate": 2, "Narrow": 1, "Thin": 0}
+
+
 def strength_of(people: int, platforms: int) -> str:
     if people >= 15 and platforms >= 3:
         return "Strong"
@@ -481,14 +484,17 @@ def evidence_stats(ids: list, verified: dict) -> dict:
     # Pasted comments can support a finding, but cannot make it "Strong" alone,
     # because their source and authors could not be checked.
     checked = [r for r in rows if not is_pasted(r["platform"])]
-    checked_level = strength_of(len({person_key(r) for r in checked}), len({r["platform"] for r in checked}))
+    checked_people = len({person_key(r) for r in checked})
+    checked_level = strength_of(checked_people, len({r["platform"] for r in checked}))
     if level == "Strong" and checked_level != "Strong":
         level = "Moderate"
 
     return {
         "level": level,
         "people": people,
-        "pasted": people - len({person_key(r) for r in checked}),
+        "pasted": people - checked_people,
+        "checked_level": checked_level if checked_people else "None",
+        "checked_people": checked_people,
         "mentions": len(rows),
         "platforms": platforms,
         "open": sum(r["status"] == "open" for r in rows),
@@ -545,8 +551,13 @@ def apply_evidence(report: dict, verified: dict) -> dict:
         )
         kept.append(opp)
 
-    # An idea resting only on hand-pasted comments cannot outrank checked evidence.
-    kept.sort(key=lambda o: o["evidence_strength"]["people"] == o["evidence_strength"]["pasted"])
+    # Rank by checked evidence only: spread across platforms first, then how many
+    # people. Pasted comments are shown, but cannot move an idea up. Ties keep the
+    # synthesizer's order.
+    kept.sort(key=lambda o: (
+        -LEVEL_RANK.get(o["evidence_strength"]["checked_level"], -1),
+        -o["evidence_strength"]["checked_people"],
+    ))
 
     report["opportunities"] = kept
     watch = report.get("watch_list") or []

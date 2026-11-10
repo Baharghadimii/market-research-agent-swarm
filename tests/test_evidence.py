@@ -178,6 +178,34 @@ def test_pasted_only_idea_cannot_outrank_checked_evidence():
     assert report["the_call"]["recommended_focus"] == "idea 1"
 
 
+def test_ranking_ignores_pasted_comments():
+    rows = {
+        "P1": row("P1", author="p1", platform="Reddit (pasted by you)"),
+        "P2": row("P2", author="p2", platform="Reddit (pasted by you)"),
+        "Y1": row("Y1", author="y1", platform="YouTube"),
+    }
+    rows.update({f"A{n}": row(f"A{n}", author=f"a{n}", platform="App Store") for n in range(5)})
+    report = apply_evidence(report_with(["P1", "P2", "Y1"], [f"A{n}" for n in range(5)]), rows)
+    assert [o["name"] for o in report["opportunities"]] == ["Opp 1", "Opp 0"]
+    assert report["the_call"]["recommended_focus"] == "idea 1"
+
+
+def test_spread_across_platforms_beats_volume_on_one():
+    rows = {f"A{n}": row(f"A{n}", author=f"a{n}", platform="App Store") for n in range(12)}
+    rows.update({f"G{n}": row(f"G{n}", author=f"g{n}", platform="GitHub") for n in range(3)})
+    rows.update({f"H{n}": row(f"H{n}", author=f"h{n}", platform="Hacker News") for n in range(3)})
+    one_platform = [f"A{n}" for n in range(12)]
+    two_platforms = [f"G{n}" for n in range(3)] + [f"H{n}" for n in range(3)]
+    report = apply_evidence(report_with(one_platform, two_platforms), rows)
+    assert [o["evidence_strength"]["level"] for o in report["opportunities"]] == ["Moderate", "Narrow"]
+
+
+def test_equal_evidence_keeps_the_synthesizer_order():
+    rows = {"E1": row("E1", author="a"), "E2": row("E2", author="b")}
+    report = apply_evidence(report_with(["E1"], ["E2"]), rows)
+    assert [o["name"] for o in report["opportunities"]] == ["Opp 0", "Opp 1"]
+
+
 def test_coverage_says_reddit_was_only_pasted():
     log = [{"type": "pasted", "target": "Reddit", "items": 3}]
     cov = coverage_summary(log, {}, {}, {})
