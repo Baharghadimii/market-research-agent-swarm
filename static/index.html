@@ -712,7 +712,7 @@
   </section>
 
   <!-- PAST REPORTS -->
-  <div class="home-lists" id="homeLists">
+  <div class="home-lists" id="homeLists" style="display:none;">
     <div class="mini-card" id="pastCard">
       <div class="mini-card-title">Past reports</div>
       <div id="pastList"></div>
@@ -1665,7 +1665,10 @@
   loadSpending();
   if (location.hash === '#past') showPast();
   else if (hashReportId()) loadReport(hashReportId());
-  else loadPastReports();  // fills the tab's count
+  else {
+    setView('home');   // the lists belong to the Past reports tab, even on first load
+    loadPastReports(); // fills the tab's count
+  }
 
   // Allow Cmd+Enter / Ctrl+Enter to submit
   document.getElementById('prompt').addEventListener('keydown', e => {
