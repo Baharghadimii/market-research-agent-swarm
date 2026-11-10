@@ -464,6 +464,11 @@
       padding: 20px 22px;
     }
     .card.expanded .card-body { display: block; }
+    .tabs { display: flex; gap: 8px; margin: 0 0 24px; border-bottom: 1.5px solid var(--cream-border); }
+    .tab { padding: 10px 16px; margin-bottom: -1.5px; border: 0; border-bottom: 2.5px solid transparent; background: none; color: var(--ink-mid); font: inherit; font-size: .95rem; font-weight: 500; cursor: pointer; }
+    .tab:hover { color: var(--ink); }
+    .tab.active { color: var(--ink); border-bottom-color: var(--ink); }
+    .tab-count { color: var(--ink-light); font-weight: 400; }
     .paste-box { margin: 14px 0 18px; color: var(--ink-mid); font-size: .9rem; }
     .paste-box summary { cursor: pointer; font-weight: 500; color: var(--ink); }
     .paste-hint { margin: 8px 0 12px; line-height: 1.5; }
@@ -647,6 +652,8 @@
     /* ── RESPONSIVE ── */
     @media (max-width: 600px) {
       header { padding: 20px; }
+    .tabs { gap: 4px; }
+    .tab { padding: 10px 12px; }
       main { padding: 32px 16px 60px; }
       .card-fields { grid-template-columns: 1fr; }
       .lower-grid { grid-template-columns: 1fr; }
@@ -668,8 +675,14 @@
 
 <main>
 
+  <!-- TABS -->
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button type="button" class="tab active" id="tabNew" role="tab" aria-selected="true" onclick="goTab('new')">New research</button>
+    <button type="button" class="tab" id="tabPast" role="tab" aria-selected="false" onclick="goTab('past')">Past reports <span class="tab-count" id="pastCount"></span></button>
+  </nav>
+
   <!-- PROMPT -->
-  <section class="prompt-section">
+  <section class="prompt-section" id="promptSection">
     <div class="prompt-label">What market gap are you researching?</div>
     <div class="prompt-hint">Describe the space you want to explore — the swarm will figure out where to look.</div>
     <div class="input-wrap">
@@ -1184,12 +1197,50 @@
     box.classList.add('visible');
   }
 
+  let currentView = 'home';
+  let activeJob = null;  // the run whose progress the page is following, if any
+
   function setView(view) {
-    // view: 'home' | 'loading' | 'results'
+    // view: 'home' (New research tab) | 'past' (Past reports tab) | 'loading' | 'results'
+    currentView = view;
     document.getElementById('results').classList.toggle('visible', view === 'results');
     document.getElementById('loading').classList.toggle('visible', view === 'loading');
-    document.getElementById('homeLists').style.display = view === 'home' ? '' : 'none';
+    document.getElementById('homeLists').style.display = view === 'past' ? '' : 'none';
+    // The search box belongs to New research only; a report or the past list replaces it.
+    document.getElementById('promptSection').style.display = view === 'home' ? '' : 'none';
     document.getElementById('runBtn').disabled = view === 'loading';
+    if (view === 'results') return;  // keep whichever tab the report was opened from
+    const onPast = view === 'past';
+    for (const [id, active] of [['tabNew', !onPast], ['tabPast', onPast]]) {
+      const tab = document.getElementById(id);
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    }
+  }
+
+  function goTab(tab) {
+    if (tab === 'past') {
+      if (location.hash !== '#past') location.hash = '#past';
+      else showPast();
+      return;
+    }
+    // While a run is in progress, the New research tab shows its progress.
+    if (activeJob) {
+      history.replaceState(null, '', location.pathname + location.search);
+      setView('loading');
+      return;
+    }
+    history.replaceState(null, '', location.pathname + location.search);
+    showHome();
+  }
+
+  function showPast() {
+    currentReport = null;
+    currentReportId = null;
+    setView('past');
+    document.getElementById('errorBox').classList.remove('visible');
+    loadPastReports();
+    window.scrollTo(0, 0);
   }
 
   async function api(method, url, body) {
@@ -1231,6 +1282,7 @@
       return;
     }
     const reports = data.reports || [];
+    document.getElementById('pastCount').textContent = reports.length ? `(${reports.length})` : '';
     if (!reports.length) {
       pastList.innerHTML = '<div class="mini-item quote-meta" style="padding-left:0;">No saved reports yet.</div>';
     } else {
@@ -1308,6 +1360,7 @@
   }
 
   window.addEventListener('hashchange', () => {
+    if (location.hash === '#past') { showPast(); return; }
     const id = hashReportId();
     if (id) {
       if (id !== currentReportId) loadReport(id);
@@ -1537,6 +1590,15 @@
   }
 
   async function pollJob(jobId) {
+    activeJob = jobId;
+    try {
+      await followJob(jobId);
+    } finally {
+      if (activeJob === jobId) activeJob = null;
+    }
+  }
+
+  async function followJob(jobId) {
     const token = ++pollToken;
     let failures = 0;
     while (token === pollToken) {
@@ -1601,8 +1663,9 @@
 
   // ── STARTUP ──
   loadSpending();
-  if (hashReportId()) loadReport(hashReportId());
-  else loadPastReports();
+  if (location.hash === '#past') showPast();
+  else if (hashReportId()) loadReport(hashReportId());
+  else loadPastReports();  // fills the tab's count
 
   // Allow Cmd+Enter / Ctrl+Enter to submit
   document.getElementById('prompt').addEventListener('keydown', e => {
