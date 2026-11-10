@@ -5,6 +5,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.evidence import (
     apply_evidence,
+    pick_reddit_threads,
+    preview_pasted,
     coverage_summary,
     evidence_stats,
     parse_pasted,
@@ -138,7 +140,8 @@ def test_pasted_text_splits_on_blank_lines_and_keeps_links():
         "ok\n\n"
         "I gave up and made my own spreadsheet to track it all."
     )
-    items, unused = parse_pasted("reddit", raw)
+    items, unused, mode = parse_pasted("reddit", raw)
+    assert mode == "comments"
     assert len(items) == 2 and unused == 1
     assert items[0].url == "https://www.reddit.com/r/x/comments/1/a"
     assert "reddit.com" not in items[0].text
@@ -215,3 +218,118 @@ def test_coverage_says_reddit_was_only_pasted():
         [{"type": "pasted", "target": "Facebook", "items": 1}], {}, {}, {}
     )["not_searched"]
     assert "not against the original site" in cov["limits"]
+
+
+REDDIT_PAGE = """Skip to main content
+Open menu
+Reddit
+Log In
+r/speechdelays
+•
+2 mo. ago
+tired_mom_22
+Waitlist for speech therapy is over a year, what do you all do in the meantime?
+Our pediatrician referred us in March and the earliest slot is next spring. The apps we tried are all flashcards.
+Upvote
+48
+Downvote
+31
+Go to comments
+Share
+Sort by:
+Best
+Search Comments
+dadofthree
+•
+2mo ago
+We used the library's free early literacy sessions while we waited, more useful than any paid app.
+Upvote
+12
+Downvote
+Reply
+Award
+Share
+tired_mom_22
+OP
+•
+2mo ago
+Thank you, I did not know libraries did that, checking ours this week.
+Upvote
+3
+Downvote
+Reply
+Share
+slp_in_training
+•
+1mo ago
+Ask the clinic for a home program sheet. Most will give one even before your first appointment.
+Reply
+Share
+5 more replies
+"""
+
+FACEBOOK_PAGE = """Speech Delay Parents Support Group
+Jane Doe
+Admin
+3d
+Does anyone else feel like the apps are designed to upsell you while your kid is playing? Every two minutes a popup.
+Like
+Comment
+Share
+12
+Most relevant
+Maria Lopez
+Yes! We deleted two apps because of this, my son kept tapping the buy button.
+2d
+Like
+Reply
+4
+Sam Patel
+Top fan
+We moved to printed picture cards from our therapist, cheaper and no popups at all.
+1d
+Like
+Reply
+View more comments
+"""
+
+
+def test_whole_reddit_page_becomes_comments_with_authors():
+    items, unused, mode = parse_pasted("reddit", "https://www.reddit.com/r/speechdelays/comments/abc123/x\n" + REDDIT_PAGE)
+    texts = [i.text for i in items]
+    assert mode == "page"
+    assert texts[0].startswith("Waitlist for speech therapy")
+    assert any(t.startswith("We used the library") for t in texts)
+    assert any(t.startswith("Ask the clinic") for t in texts)
+    assert not any(w in " ".join(texts) for w in ("Upvote", "Downvote", "Reply", "Skip to main", "more replies"))
+    authors = {i.author for i in items if "library" in i.text or "Waitlist" in i.text or "Thank you" in i.text}
+    assert authors == {"pasted-reddit-tired_mom_22", "pasted-reddit-dadofthree"}
+    assert all(i.url == "https://www.reddit.com/r/speechdelays/comments/abc123/x" for i in items)
+
+
+def test_same_reddit_author_counts_once():
+    preview = preview_pasted("reddit", REDDIT_PAGE)
+    assert preview["mode"] == "page"
+    assert preview["people"] == preview["comments"] - 1
+
+
+def test_whole_facebook_page_drops_names_from_text():
+    items, _, mode = parse_pasted("facebook", FACEBOOK_PAGE)
+    assert mode == "page"
+    joined = " ".join(i.text for i in items)
+    for name in ("Jane Doe", "Maria Lopez", "Sam Patel", "Top fan", "Admin"):
+        assert name not in joined
+    assert {i.author for i in items} >= {"pasted-facebook-maria lopez", "pasted-facebook-sam patel"}
+    assert any(i.text.startswith("Does anyone else feel") for i in items)
+
+
+def test_reddit_threads_are_picked_from_search_results():
+    results = [
+        {"title": "Waitlist help : r/speechdelays", "link": "https://www.reddit.com/r/speechdelays/comments/abc123/waitlist_help/"},
+        {"title": "Same thread again", "link": "https://www.reddit.com/r/speechdelays/comments/abc123/waitlist_help/?sort=new"},
+        {"title": "A subreddit page", "link": "https://www.reddit.com/r/speechdelays/"},
+        {"title": "Not reddit", "link": "https://example.com/r/x/comments/1"},
+    ]
+    threads = pick_reddit_threads(results)
+    assert threads == [{"title": "Waitlist help", "subreddit": "r/speechdelays",
+                        "url": "https://www.reddit.com/r/speechdelays/comments/abc123", "date": ""}]

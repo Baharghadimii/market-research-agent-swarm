@@ -29,6 +29,8 @@ from tools.evidence import (
     assign_ids,
     coverage_summary,
     parse_pasted,
+    pick_reddit_threads,
+    preview_pasted,
     run_connectors,
     verify_extractions,
 )
@@ -188,6 +190,7 @@ so never plan around them. "queries" are Google searches for finding competitors
 Return ONLY valid JSON, no preamble, no markdown fences:
 {{
   "domain": "Short domain name (e.g. Speech Delay Apps, Vancouver Coffee Shops, B2B Kafka Tools)",
+  "reddit_searches": ["short keywords"],
   "thinking": "2-3 sentences explaining WHY you chose these specific sources for this specific prompt",
   "researchers": [
     {{
@@ -205,6 +208,9 @@ Examples of GOOD sources: "App Store 1-3 star reviews of Speech Blubs",
 "YouTube comments on speech therapy videos", "Parenting Stack Exchange questions on late talkers"
 
 Examples of BAD sources: "App stores", "Social media", "Forums"
+
+Also add a top-level "reddit_searches" list: 1-3 short keyword searches (2-5 words each) for finding
+Reddit threads where these people describe the problem. The person will read those threads themselves.
 
 Be ruthlessly specific. The researchers can only search for what you tell them to search for."""
 
@@ -293,7 +299,11 @@ def add_pasted_comments(researcher_results: dict, pasted) -> list:
         raw = pasted.get(source)
         if not isinstance(raw, str) or not raw.strip():
             continue
-        items, unused = parse_pasted(source, raw)
+        items, unused, mode = parse_pasted(source, raw)
+        people = len({f"{i.platform}:{i.author}" for i in items})
+        detail = f"{'whole page' if mode == 'page' else 'single comments'}, {people} people"
+        if unused:
+            detail += f", {unused} short pieces skipped"
         brief = {
             "source": f"Comments you pasted from {label}",
             "queries": [],
@@ -304,7 +314,7 @@ def add_pasted_comments(researcher_results: dict, pasted) -> list:
             "items": items,
             "connector_log": [{
                 "type": "pasted", "target": label, "query": "", "status": "ok", "items": len(items),
-                "detail": f"{unused} blocks not used" if unused else "",
+                "detail": detail,
             }],
             "leads": "",
         }
@@ -337,7 +347,7 @@ Rules:
 def extract_one(brief: dict, items: list, prompt: str):
     payload = [
         {"item_id": i.id, "platform": i.platform, "thread": i.title[:120], "text": i.text}
-        for i in items[:MAX_ITEMS_PER_EXTRACTION]
+        for i in items
     ]
     user = (
         f"Research goal: {prompt}\nSignal sought: {brief.get('looking_for', '')}\n\n"
@@ -363,12 +373,12 @@ def extract_all(researcher_results: dict, prompt: str):
     threads    = []
     lock       = threading.Lock()
 
-    def extract_thread(rid, data):
+    def extract_thread(rid, data, chunk):
         nonlocal total_cost
         # An uncaught exception in a thread disappears silently. That is how the
         # 2026-07-17 outage produced "zero source data" with no error anywhere.
         try:
-            found, cost = extract_one(data["brief"], data["items"], prompt)
+            found, cost = extract_one(data["brief"], chunk, prompt)
             with lock:
                 extractions.extend(found)
                 total_cost += cost
@@ -378,9 +388,12 @@ def extract_all(researcher_results: dict, prompt: str):
                 failures.append({"type": "extractor", "target": data["brief"].get("source", rid),
                                  "query": "", "status": "failed", "items": 0, "detail": str(e)[:200]})
 
+    # Large pastes are read in batches so nothing past the first batch is ignored.
     for rid, data in researcher_results.items():
-        if data["items"]:
-            t = threading.Thread(target=extract_thread, args=(rid, data))
+        items = data["items"]
+        for start in range(0, len(items), MAX_ITEMS_PER_EXTRACTION):
+            chunk = items[start:start + MAX_ITEMS_PER_EXTRACTION]
+            t = threading.Thread(target=extract_thread, args=(rid, data, chunk))
             threads.append(t)
             t.start()
 
@@ -452,7 +465,9 @@ def run_synthesizer(domain: str, verified: dict, researcher_results: dict, promp
         f"User prompt: {prompt}\nDomain: {domain}\n"
         f"Verified quotes: {len(verified)} on {len(platforms)} platforms\n\n=== VERIFIED QUOTES ===\n"
     )
-    for row in list(verified.values())[:MAX_QUOTES_TO_SYNTHESIZER]:
+    # Checked quotes first, so a large paste cannot crowd them out of the limit.
+    ordered = sorted(verified.values(), key=lambda r: r["platform"].endswith("(pasted by you)"))
+    for row in ordered[:MAX_QUOTES_TO_SYNTHESIZER]:
         context += f"[{row['id']}] {row['platform']} | {row['status']} | {row['kind']} | {row['theme']}: \"{row['quote']}\"\n"
 
     context += "\n=== WEB SEARCH LEADS (context only, not evidence) ===\n"
@@ -541,11 +556,38 @@ def check_existing_solutions(opportunities: list) -> float:
     return total_cost
 
 # ────────────────────────────────────────────────
+# REDDIT THREADS TO READ
+# Reddit can't be read automatically, so point the person at the right threads.
+# ────────────────────────────────────────────────
+def find_reddit_threads(plan: dict, prompt: str) -> list:
+    searches = [s for s in plan.get("reddit_searches", []) if isinstance(s, str) and s.strip()][:3]
+    if not searches:
+        searches = [plan.get("domain") or prompt[:80]]
+    # Past year first, so the list leads with current complaints; older threads only fill gaps.
+    recent, older = [], []
+    for query in searches:
+        for past_year, bucket in ((True, recent), (False, older)):
+            try:
+                bucket += serper_results(f"site:reddit.com {query.strip()}", past_year=past_year)
+            except Exception as e:
+                print(f"[WARN] reddit thread search failed {query!r}: {type(e).__name__}: {e}", flush=True)
+    return pick_reddit_threads(recent + older)
+
+# ────────────────────────────────────────────────
 # ROUTES
 # ────────────────────────────────────────────────
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
+
+@app.route("/preview-pasted", methods=["POST"])
+def preview_pasted_route():
+    """Show how pasted text would be split, before paying for a run."""
+    body = request.get_json(silent=True) or {}
+    source, text = body.get("source"), body.get("text")
+    if source not in PASTED_SOURCES or not isinstance(text, str):
+        return jsonify({"error": "source must be reddit or facebook, with text"}), 400
+    return jsonify(preview_pasted(source, text))
 
 @app.route("/research", methods=["POST"])
 def research():
@@ -584,6 +626,8 @@ def research():
         total_cost += check_existing_solutions(report["opportunities"])
 
         connector_logs = [e for d in researcher_results.values() for e in d["connector_log"]]
+        report["reddit_threads"] = find_reddit_threads(plan, prompt)
+
         report["evidence_coverage"] = coverage_summary(
             connector_logs + extract_failures, store, verified, counts
         )

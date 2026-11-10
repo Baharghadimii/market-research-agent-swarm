@@ -57,8 +57,6 @@ PASTED_SOURCES = {
     "facebook": ("Facebook", r"https://(?:[a-z0-9-]+\.)?facebook\.com/\S+"),
 }
 PASTED_SUFFIX = " (pasted by you)"
-MAX_PASTED_CHARS = 30000
-MAX_PASTED_PER_SOURCE = 45
 MIN_PASTED_CHARS = 20
 
 # Deliberately narrow: "I built an app and it keeps crashing" is a complaint.
@@ -132,20 +130,141 @@ def _redact(text: str) -> str:
     return re.sub(r"(?<!\d)(?:\+?\d[\s().-]?){10,14}(?!\d)", "[phone removed]", text)
 
 
-def parse_pasted(source: str, raw: str) -> tuple:
-    """Split pasted text into one item per blank-line-separated block.
+# Whole pages copied with Cmd+A carry buttons, counters and menus between comments.
+# These patterns mark that clutter. They also mark where one comment ends.
+_PAGE_NOISE = {
+    "reply", "share", "award", "report", "save", "follow", "join", "joined", "upvote", "downvote",
+    "vote", "comment", "comments", "more", "like", "love", "edited", "op", "promoted", "sponsored",
+    "best", "top", "new", "old", "controversial", "q&a", "open", "sort by:", "sort by", "author",
+    "top fan", "most relevant", "all comments", "newest", "write a comment…", "write a comment...",
+    "add a comment", "back", "home", "popular", "explore", "log in", "sign up", "get app", "•", "·",
+    "translate", "see translation", "hide", "view insights", "send", "copy link", "menu",
+    "skip to main content", "open menu", "reddit", "go to comments", "search comments", "open chat",
+    "create post", "create", "advertise on reddit", "community info", "admin", "moderator",
+    "group expert", "rising contributor", "all-star contributor", "anonymous participant", "facebook",
+}
+_BULLETS = {"•", "·"}
+_PAGE_TIME = re.compile(
+    r"^(?:[•·]\s*)?(?:\d+\s*(?:s|sec|secs|m|min|mins|h|hr|hrs|d|day|days|w|wk|wks|week|weeks|"
+    r"mo|mos|month|months|y|yr|yrs|year|years)\.?(?:\s+ago)?|just now|yesterday)(?:\s*[•·].*)?$",
+    re.IGNORECASE,
+)
+_PAGE_COUNT = re.compile(
+    r"^[\d.,]+\s*[km]?(?:\s*(?:votes?|points?|upvotes?|comments?|replies|repl(?:y|ies)|likes?|"
+    r"reactions?|shares?|members?|online))?$",
+    re.IGNORECASE,
+)
+_PAGE_MORE = re.compile(
+    r"^(?:\d+\s+more\s+repl(?:y|ies)|view (?:all|more|\d+).*|see more.*|show more.*|"
+    r"continue this thread.*|load more.*|more repl(?:y|ies)|read more.*|"
+    r"r/[a-z0-9_]+|u/[a-z0-9_-]+ .*|level \d+)$",
+    re.IGNORECASE,
+)
+_REDDIT_HANDLE = re.compile(r"^(?:u/)?([A-Za-z0-9_-]{3,24})$")
+_FB_NAME = re.compile(r"^(?:[A-Z][\w'’.-]*)(?: [A-Z][\w'’.-]*){1,3}$")
+MAX_PASTED_CHARS = 150000
+MAX_PASTED_PER_SOURCE = 150
 
-    Returns (items, blocks_not_used). Each block counts as one person, because
-    pasted text has no reliable author. Reports disclose that.
+
+def _line_kind(line: str) -> str:
+    low = line.strip().lower()
+    if _PAGE_TIME.match(low):
+        return "time"
+    if low in _PAGE_NOISE or _PAGE_COUNT.match(low) or _PAGE_MORE.match(low):
+        return "noise"
+    return "text"
+
+
+def looks_like_whole_page(raw: str) -> bool:
+    lines = [l for l in (raw or "").splitlines() if l.strip()]
+    if len(lines) < 8:
+        return False
+    marks = sum(_line_kind(l) != "text" for l in lines)
+    return marks >= 4 and marks / len(lines) >= 0.12
+
+
+def _page_blocks(source: str, raw: str, url_pattern: str) -> list:
+    """Split a whole copied page into (author, text, url) comments."""
+    lines = [l.strip() for l in raw.splitlines()]
+    blocks, current, author, page_url = [], [], "", ""
+
+    def close():
+        # A name followed by badges such as "OP" or "Top fan" keeps its author
+        # until the comment text arrives, so only reset after a comment is saved.
+        nonlocal current, author
+        if current:
+            blocks.append((author, " ".join(current), page_url))
+            current, author = [], ""
+
+    def neighbour(index: int, step: int) -> str:
+        j = index + step
+        while 0 <= j < len(lines):
+            if lines[j] and lines[j] not in _BULLETS:
+                return lines[j]
+            j += step
+        return ""
+
+    for index, line in enumerate(lines):
+        if not line:
+            continue
+        link = re.fullmatch(url_pattern, line)
+        if link:
+            close()
+            page_url = link.group(0)
+            continue
+        kind = _line_kind(line)
+        if kind == "noise":
+            close()
+            continue
+        if kind == "time":
+            if current:
+                close()
+            continue
+        upcoming, previous = neighbour(index, 1), neighbour(index, -1)
+        handle = _REDDIT_HANDLE.match(line)
+        if source == "reddit" and handle and (
+            line.startswith("u/")
+            or _line_kind(upcoming) == "time"
+            or upcoming.lower() == "op"
+            or (not current and _line_kind(previous) == "time" and _line_kind(upcoming) == "text")
+        ):
+            close()
+            author = handle.group(1)
+            continue
+        if source == "facebook" and _FB_NAME.match(line) and (
+            _line_kind(upcoming) == "text" or upcoming.lower() in _PAGE_NOISE
+        ) and _line_kind(upcoming) != "time":
+            close()
+            author = line
+            continue
+        current.append(line)
+    close()
+    return blocks
+
+
+def parse_pasted(source: str, raw: str) -> tuple:
+    """Split pasted text into comments.
+
+    Accepts single comments separated by blank lines, or whole pages copied with
+    Cmd+A. On whole pages, the comment author is detected when possible so one
+    person counts once; otherwise each comment counts as one person, which
+    reports disclose. Returns (items, blocks_not_used, mode).
     """
     label, url_pattern = PASTED_SOURCES[source]
-    blocks = re.split(r"\n\s*\n", (raw or "").replace("\r\n", "\n").strip()[:MAX_PASTED_CHARS])
+    raw = (raw or "").replace("\r\n", "\n").strip()[:MAX_PASTED_CHARS]
+    if looks_like_whole_page(raw):
+        mode, blocks = "page", _page_blocks(source, raw, url_pattern)
+    else:
+        mode, blocks = "comments", []
+        for block in re.split(r"\n\s*\n", raw):
+            link = re.search(url_pattern, block)
+            blocks.append(("", re.sub(url_pattern, " ", block), link.group(0) if link else ""))
+
     items, unused = [], 0
-    for block in blocks:
-        link = re.search(url_pattern, block)
-        text = re.sub(r"\s+", " ", re.sub(url_pattern, " ", block)).strip()
+    for author, block, link in blocks:
+        text = re.sub(r"\s+", " ", block).strip()
         if len(text) < MIN_PASTED_CHARS:
-            unused += 1 if block.strip() else 0
+            unused += 1 if text else 0
             continue
         if len(items) >= MAX_PASTED_PER_SOURCE:
             unused += 1
@@ -153,12 +272,48 @@ def parse_pasted(source: str, raw: str) -> tuple:
         items.append(
             Item(
                 platform=label + PASTED_SUFFIX,
-                author=f"pasted-{source}-{len(items) + 1}",
+                author=f"pasted-{source}-{author.lower()}" if author else f"pasted-{source}-#{len(items) + 1}",
                 text=_redact(text),
-                url=link.group(0) if link else "",
+                url=link,
             )
         )
-    return items, unused
+    return items, unused, mode
+
+
+def preview_pasted(source: str, raw: str) -> dict:
+    """What the swarm would take from a paste, without spending anything."""
+    items, unused, mode = parse_pasted(source, raw)
+    return {
+        "mode": mode,
+        "comments": len(items),
+        "people": len({person_key(asdict(i)) for i in items}),
+        "unused": unused,
+        "capped": len(items) >= MAX_PASTED_PER_SOURCE,
+        "samples": [i.text[:160] for i in items[:3]],
+    }
+
+
+_REDDIT_THREAD = re.compile(r"^https://(?:www\.|old\.)?reddit\.com/r/([A-Za-z0-9_]+)/comments/([a-z0-9]+)")
+
+
+def pick_reddit_threads(results: list, limit: int = 8) -> list:
+    """Keep real Reddit discussion threads from search results, one per thread."""
+    threads, seen = [], set()
+    for r in results:
+        match = _REDDIT_THREAD.match(r.get("link") or "")
+        if not match or match.group(2) in seen:
+            continue
+        seen.add(match.group(2))
+        title = re.sub(r"\s*[:|-]\s*r/[A-Za-z0-9_]+\s*$", "", r.get("title") or "").strip()
+        threads.append({
+            "title": title or "Reddit thread",
+            "subreddit": f"r/{match.group(1)}",
+            "url": match.group(0),
+            "date": r.get("date", ""),
+        })
+        if len(threads) >= limit:
+            break
+    return threads
 
 
 def _cutoff() -> datetime:

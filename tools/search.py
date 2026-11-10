@@ -4,7 +4,7 @@ load_dotenv()
 import requests
 
 
-def serper_results(query: str) -> list:
+def serper_results(query: str, past_year: bool = False) -> list:
     """Search Google via Serper. Returns [{title, snippet, link}].
 
     These are leads and competitor names only. Snippets are fragments, so
@@ -16,12 +16,13 @@ def serper_results(query: str) -> list:
             "X-API-KEY": os.getenv("SERPER_API_KEY"),
             "Content-Type": "application/json"
         },
-        json={"q": query, "num": 10},
+        json={"q": query, "num": 10, **({"tbs": "qdr:y"} if past_year else {})},
         timeout=20
     )
     response.raise_for_status()
     return [
-        {"title": r.get("title", ""), "snippet": r.get("snippet", ""), "link": r.get("link", "")}
+        {"title": r.get("title", ""), "snippet": r.get("snippet", ""), "link": r.get("link", ""),
+         "date": r.get("date", "")}
         for r in response.json().get("organic", [])
     ]
 

@@ -467,6 +467,9 @@
     .paste-box { margin: 14px 0 18px; color: var(--ink-mid); font-size: .9rem; }
     .paste-box summary { cursor: pointer; font-weight: 500; color: var(--ink); }
     .paste-hint { margin: 8px 0 12px; line-height: 1.5; }
+    .paste-check { margin-top: 10px; padding: 8px 14px; border: 1.5px solid var(--cream-border); border-radius: 8px; background: white; color: var(--ink); font: inherit; cursor: pointer; }
+    .paste-result { margin-top: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+    .paste-result .quote-meta { margin-top: 4px; }
     .paste-label { display: block; margin: 12px 0 6px; font-weight: 500; color: var(--ink); }
     .evidence-notice { margin-bottom: 16px; padding: 12px 16px; border-radius: 10px; background: var(--rose-light); color: var(--rose); font-size: .9rem; line-height: 1.45; }
     .quote { margin-top: 10px; padding-left: 12px; border-left: 3px solid var(--amber); overflow-wrap: anywhere; }
@@ -656,11 +659,13 @@
     </div>
     <details class="paste-box">
       <summary>Add comments from Reddit or Facebook (optional)</summary>
-      <p class="paste-hint">The swarm can't read these sites, so paste comments you found yourself. Leave a blank line between comments, and include a link to the comment if you have one. Take out names and private details first, because pasted text is sent to AI models.</p>
-      <label class="paste-label" for="pasteReddit">Reddit comments</label>
-      <textarea id="pasteReddit" maxlength="30000" placeholder="One comment, then a blank line, then the next…"></textarea>
-      <label class="paste-label" for="pasteFacebook">Facebook comments</label>
-      <textarea id="pasteFacebook" maxlength="30000" placeholder="One comment, then a blank line, then the next…"></textarea>
+      <p class="paste-hint">The swarm can't read these sites, so paste what you found yourself. The quickest way: open a thread, press Cmd+A then Cmd+C, and paste the whole page. You can paste several pages, and putting each thread's link on the line above it lets quotes link back. Single comments separated by blank lines work too. Take out private details first, because pasted text is sent to AI models.</p>
+      <label class="paste-label" for="pasteReddit">Reddit pages or comments</label>
+      <textarea id="pasteReddit" maxlength="150000" placeholder="Paste whole Reddit pages here…"></textarea>
+      <label class="paste-label" for="pasteFacebook">Facebook pages or comments</label>
+      <textarea id="pasteFacebook" maxlength="150000" placeholder="Paste Facebook posts and comments here…"></textarea>
+      <button type="button" class="paste-check" onclick="checkPasted()">Check what I pasted</button>
+      <div class="paste-result" id="pasteResult"></div>
     </details>
     <button class="run-btn" id="runBtn" onclick="runResearch()">
       <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -733,6 +738,13 @@
         <div class="mini-card-title">⚡ Contradictions</div>
         <div class="mini-list" id="contradictions"></div>
       </div>
+    </div>
+
+    <!-- REDDIT THREADS -->
+    <div class="mini-card" id="threadsCard" style="margin-top:16px;display:none;">
+      <div class="mini-card-title">🧵 Reddit Threads Worth Reading</div>
+      <div class="mini-list" id="threadsList"></div>
+      <button type="button" class="paste-check" onclick="openPasteBox()">Paste comments from these and run again</button>
     </div>
 
     <!-- EVIDENCE COVERAGE -->
@@ -860,6 +872,54 @@
         <div class="card-field-label">Does this already exist?</div>
         <div class="card-field-value"><strong>${esc(verdicts[found.verdict] || found.verdict)}.</strong> ${esc(found.note)} ${products ? 'See ' + products + '.' : ''} <span class="quote-meta">Checked using ${esc(found.basis)}.</span></div>
       </div>`;
+  }
+
+  function renderThreads(data) {
+    const threads = data.reddit_threads || [];
+    const card = document.getElementById('threadsCard');
+    if (!threads.length) { card.style.display = 'none'; return; }
+    document.getElementById('threadsList').innerHTML = threads.map(t => `
+      <div class="mini-item">
+        <a href="${safeUrl(t.url)}" target="_blank" rel="noopener noreferrer">${esc(t.title)}</a>
+        <div class="quote-meta">${esc(t.subreddit)}${t.date ? ' · ' + esc(t.date) : ''}</div>
+      </div>`).join('') +
+      '<div class="mini-item quote-meta">Found through Google. The swarm can\'t read Reddit itself, so these are not counted as evidence until you paste them.</div>';
+    card.style.display = 'block';
+  }
+
+  function openPasteBox() {
+    const box = document.querySelector('.paste-box');
+    box.open = true;
+    box.scrollIntoView({behavior: 'smooth', block: 'start'});
+    document.getElementById('pasteReddit').focus({preventScroll: true});
+  }
+
+  async function checkPasted() {
+    const out = document.getElementById('pasteResult');
+    const sources = [['reddit', 'Reddit', 'pasteReddit'], ['facebook', 'Facebook', 'pasteFacebook']];
+    const lines = [];
+    for (const [source, label, id] of sources) {
+      const text = document.getElementById(id).value;
+      if (!text.trim()) continue;
+      try {
+        const res = await fetch('/preview-pasted', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({source, text}),
+        });
+        const p = await res.json();
+        if (!res.ok) throw new Error(p.error || `HTTP ${res.status}`);
+        const how = p.mode === 'page' ? 'whole page' : 'single comments';
+        const people = p.people === 1 ? '1 person' : `${p.people} people`;
+        let line = `<strong>${label}:</strong> found ${p.comments} comments from ${people} (read as ${how}).`;
+        if (p.capped) line += ' That is the limit, so anything after it was left out.';
+        if (p.samples.length) line += `<div class="quote-meta">First: “${esc(p.samples[0])}”</div>`;
+        lines.push(line);
+      } catch (e) {
+        lines.push(`<strong>${label}:</strong> couldn't check it (${esc(e.message)}).`);
+      }
+    }
+    out.innerHTML = lines.join('<br>') || 'Nothing pasted yet.';
   }
 
   function renderCoverage(data) {
@@ -1012,6 +1072,7 @@
     }
 
     renderCoverage(data);
+    renderThreads(data);
 
     // Cost
     if (data.cost_usd !== undefined) {
@@ -1036,6 +1097,7 @@
     document.getElementById('prompt').value = '';
     document.getElementById('pasteReddit').value = '';
     document.getElementById('pasteFacebook').value = '';
+    document.getElementById('pasteResult').innerHTML = '';
     document.getElementById('prompt').focus();
   }
 
