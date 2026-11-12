@@ -1670,7 +1670,10 @@
   function runResearch() {
     const prompt = document.getElementById('prompt').value.trim();
     if (!prompt) {
-      document.getElementById('prompt').focus();
+      showError('Add your research question in the box at the top first, then press Run Research.');
+      const box = document.getElementById('prompt');
+      box.scrollIntoView({behavior: 'smooth', block: 'center'});
+      box.focus({preventScroll: true});
       return;
     }
     currentReport = null;
