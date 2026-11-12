@@ -901,6 +901,8 @@ def start_job(prompt: str, pasted=None, focus: dict = None, parent_id: str = Non
 # TRACKED QUESTIONS
 # Re-run a saved question on a schedule, inside this server process.
 # ────────────────────────────────────────────────
+TRACKER_BUSY = threading.Event()  # set while a tracked question is being rerun
+
 def run_due_trackers():
     for tracker in store.due_trackers():
         try:
@@ -909,6 +911,7 @@ def run_due_trackers():
             store.mark_tracker_run(tracker["id"], retry_hours=6)
             continue
         cost = RunCost()
+        TRACKER_BUSY.set()
         try:
             report = run_pipeline(tracker["prompt"], cost=cost)
             report_id = store.save_report(report, tracker["prompt"], "tracked", tracker_id=tracker["id"])
@@ -919,6 +922,7 @@ def run_due_trackers():
             print(f"[ERROR] tracker {tracker['id']} failed: {type(e).__name__}: {e}", flush=True)
             store.mark_tracker_run(tracker["id"], retry_hours=6)
         finally:
+            TRACKER_BUSY.clear()
             store.record_spend(cost.total, f"tracked: {tracker['prompt'][:80]}")
 
 def tracker_loop():
@@ -953,6 +957,13 @@ def create_job():
         return jsonify({"job_id": start_job(prompt[:2000], body.get("pasted"))}), 202
     except SpendingLimit as e:
         return jsonify({"error": str(e)}), 429
+
+@app.route("/jobs/active")
+def jobs_active():
+    """How many runs are in progress, so a deploy can wait instead of killing one."""
+    running = _running_jobs()
+    tracker_busy = TRACKER_BUSY.is_set()
+    return jsonify({"running": running + int(tracker_busy), "jobs": running, "tracker": tracker_busy})
 
 @app.route("/jobs/<job_id>")
 def job_status(job_id):

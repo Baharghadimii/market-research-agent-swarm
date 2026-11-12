@@ -313,3 +313,10 @@ def test_broken_report_json_gets_one_retry(monkeypatch):
     monkeypatch.setattr(server, "call_llm_with_fallback", lambda models, **k: (Msg(next(answers)), models[0]))
     report, cost = server.run_synthesizer("x", {}, {}, "prompt")
     assert report["domain"] == "x" and report["opportunities"] == []
+
+
+
+def test_active_jobs_count_for_safe_deploys(client):
+    assert client.get("/jobs/active").get_json()["running"] == 0
+    server.JOBS["x"] = {"id": "x", "status": "running", "started": time.time()}
+    assert client.get("/jobs/active").get_json()["running"] == 1
