@@ -893,21 +893,45 @@
   }
 
   const PAY_LABEL = {pays_now: 'Pays today', would_pay: 'Would pay', switched: 'Switched or cancelled'};
+  const BUYER_LABEL = {
+    tried_products: 'Tried other products', workaround: 'Built a workaround', time_cost: 'Loses time to it',
+    pays_now: 'Pays today', would_pay: 'Would pay', switched: 'Switched or cancelled',
+  };
+  const BUYER_PLURAL = {
+    tried_products: 'tried other products', workaround: 'built a workaround', time_cost: 'lose time to it',
+    pays_now: 'pay today', would_pay: 'would pay', switched: 'switched or cancelled',
+  };
+
+  function signalLabel(q) {
+    return BUYER_LABEL[q.signal] || PAY_LABEL[q.pay] || '';
+  }
+
+  // People rarely say "I'd pay" when nothing exists to pay for, so this shows
+  // effort already spent on the problem as well as any mention of money.
+  function buyerSummary(opp) {
+    const bs = opp.buyer_signals || opp.pay_signals;
+    if (!bs) return null;
+    const people = Number(bs.people) || 0;
+    const kinds = Object.entries(bs.kinds || {}).map(([k, n]) => `${n} ${BUYER_PLURAL[k] || k}`).join(' · ');
+    const text = people > 0
+      ? `${people} ${people === 1 ? 'person shows' : 'people show'} signs of a future buyer${kinds ? ': ' + kinds : ''}.`
+      : 'No one here describes a workaround, trying other products, or losing time to it.';
+    return {people, text, quotes: bs.quotes || []};
+  }
 
   function payHtml(opp) {
-    const ps = opp.pay_signals;
-    if (!ps) return '';
-    const people = Number(ps.people) || 0;
-    const quotes = (ps.quotes || []).map(q => `
+    const bs = buyerSummary(opp);
+    if (!bs) return '';
+    const quotes = bs.quotes.map(q => `
       <div class="quote">
         <div class="quote-text">“${esc(q.quote)}”</div>
-        <div class="quote-meta">${esc(PAY_LABEL[q.pay] || '')}${PAY_LABEL[q.pay] ? ' · ' : ''}${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
+        <div class="quote-meta">${esc(signalLabel(q))}${signalLabel(q) ? ' · ' : ''}${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
       </div>`).join('');
     return `
       <div class="card-field full">
-        <div class="card-field-label">Signs people would pay</div>
-        <div class="card-field-value">${people > 0 ? `${people} ${people === 1 ? 'person mentions' : 'people mention'} paying, wanting to pay, or switching products.` : 'No one in these quotes mentioned paying.'}</div>
-        ${people > 0 ? quotes : ''}
+        <div class="card-field-label">Signs of a future buyer</div>
+        <div class="card-field-value">${esc(bs.text)}</div>
+        ${bs.people > 0 ? quotes : ''}
       </div>`;
   }
 
@@ -918,7 +942,7 @@
     const quotes = (opp.evidence || []).map(q => `
       <div class="quote">
         <div class="quote-text">“${esc(q.quote)}”</div>
-        <div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''} · ${esc(statusLabel[q.status] || q.status)}${PAY_LABEL[q.pay] ? ' · ' + esc(PAY_LABEL[q.pay]) : ''}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
+        <div class="quote-meta">${esc(q.platform)}${q.created ? ' · ' + esc(q.created) : ''} · ${esc(statusLabel[q.status] || q.status)}${signalLabel(q) ? ' · ' + esc(signalLabel(q)) : ''}${q.url ? ` · <a href="${safeUrl(q.url)}" target="_blank" rel="noopener noreferrer">Read original</a>` : ''}</div>
       </div>`).join('');
     return `
       <div class="card-field full">
@@ -1014,7 +1038,9 @@
     document.getElementById('coverageList').innerHTML = [
       line(`Read <strong>${cov.items_read}</strong> posts and comments. <strong>${cov.quotes_verified}</strong> quotes verified from <strong>${cov.people}</strong> people.`),
       line(`Rejected ${cov.quotes_rejected} quotes that didn't match the original text, and filtered out ${cov.sellers_filtered} from people selling something.`),
-      ...(cov.pay_quotes != null ? [line(`${esc(cov.pay_quotes)} quotes mention paying, wanting to pay, or switching.`)] : []),
+      ...(cov.buyer_quotes != null
+        ? [line(`${esc(cov.buyer_quotes)} quotes show signs of a future buyer: workarounds, products tried, time lost, or paying.`)]
+        : cov.pay_quotes != null ? [line(`${esc(cov.pay_quotes)} quotes mention paying, wanting to pay, or switching.`)] : []),
       ...(cov.connectors || []).map(connectorText),
       line(`<strong>Not searched:</strong> ${esc((cov.not_searched || []).join(', '))}`),
       line(esc(cov.limits)),
@@ -1404,13 +1430,13 @@
         out.push('');
         out.push(`> ${q.quote} — ${q.platform}${q.url ? ' (' + q.url + ')' : ''}`);
       });
-      const ps = opp.pay_signals;
-      if (ps) {
+      const bs = buyerSummary(opp);
+      if (bs) {
         out.push('');
-        out.push(`**Signs people would pay:** ${ps.people > 0 ? `${ps.people} ${ps.people === 1 ? 'person mentions' : 'people mention'} paying, wanting to pay, or switching products.` : 'No one in these quotes mentioned paying.'}`);
-        (ps.quotes || []).slice(0, 5).forEach(q => {
+        out.push(`**Signs of a future buyer:** ${bs.text}`);
+        bs.quotes.slice(0, 5).forEach(q => {
           out.push('');
-          out.push(`> ${q.quote} — ${q.platform}${q.url ? ' (' + q.url + ')' : ''}${PAY_LABEL[q.pay] ? ' [' + PAY_LABEL[q.pay] + ']' : ''}`);
+          out.push(`> ${q.quote} — ${q.platform}${q.url ? ' (' + q.url + ')' : ''}${signalLabel(q) ? ' [' + signalLabel(q) + ']' : ''}`);
         });
       }
       const ex = opp.existing_solutions;
@@ -1427,7 +1453,8 @@
       out.push('');
       out.push('## What this report read');
       out.push(`- Read ${cov.items_read} posts and comments; ${cov.quotes_verified} quotes verified from ${cov.people} people.`);
-      if (cov.pay_quotes != null) out.push(`- ${cov.pay_quotes} quotes mention paying, wanting to pay, or switching.`);
+      if (cov.buyer_quotes != null) out.push(`- ${cov.buyer_quotes} quotes show signs of a future buyer: workarounds, products tried, time lost, or paying.`);
+      else if (cov.pay_quotes != null) out.push(`- ${cov.pay_quotes} quotes mention paying, wanting to pay, or switching.`);
       (cov.connectors || []).forEach(c => {
         out.push(`- ${CONNECTOR_LABEL[c.type] || c.type}${c.target ? ' · ' + c.target : ''}: ${c.status === 'ok' ? c.items + ' items' : c.status}`);
       });

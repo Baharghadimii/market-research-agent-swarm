@@ -143,7 +143,7 @@ def test_block_order_and_text(monkeypatch):
                           "Why now: Bills are rising", "This week: Interview five owners"]
     assert "1. Vet bill tracker" in texts
     assert "Evidence: Thin · 4 people · App Store, YouTube" in texts
-    assert "Signs people would pay: 2 people" in texts
+    assert "Signs of a future buyer: 2 people" in texts
     assert "Already exists? Partly solved by others: PetPal, VetBook" in texts
     assert "Read 120 posts and comments. 9 quotes verified from 7 people." in texts
     assert "Not searched: Reddit" in texts
@@ -239,3 +239,11 @@ def test_error_without_json_body(monkeypatch):
         create_database(KEY, "parent-1")
     assert "500" in str(err.value)
     assert KEY not in str(err.value)
+
+
+
+def test_buyer_signals_show_their_breakdown():
+    report = {"opportunities": [{"name": "Idea", "evidence_strength": {"level": "Thin", "people": 3},
+                                 "buyer_signals": {"people": 3, "kinds": {"workaround": 2, "tried_products": 1}}}]}
+    texts = ["".join(p["text"]["content"] for p in b[b["type"]]["rich_text"]) for b in notion.build_blocks(report, "")]
+    assert "Signs of a future buyer: 3 people (2 built a workaround, 1 tried other products)" in texts

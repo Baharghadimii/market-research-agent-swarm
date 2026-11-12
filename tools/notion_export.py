@@ -21,6 +21,15 @@ MAX_QUOTES_PER_IDEA = 5
 EVIDENCE_LEVELS = ("Strong", "Moderate", "Narrow", "Thin", "None")
 KINDS = ("report", "deep", "tracked")
 
+BUYER_WORDING = {
+    "tried_products": "tried other products",
+    "workaround": "built a workaround",
+    "time_cost": "lose time to it",
+    "pays_now": "pay today",
+    "would_pay": "would pay",
+    "switched": "switched or cancelled",
+}
+
 VERDICT_WORDING = {
     "covered": "Already solved by others",
     "partial": "Partly solved by others",
@@ -109,9 +118,10 @@ def _opportunity_blocks(n, opp):
         line.append(", ".join(str(p) for p in strength["platforms"]))
     blocks.append(_paragraph(" · ".join(line)))
 
-    pay = opp.get("pay_signals") or {}
-    if pay.get("people"):
-        blocks.append(_paragraph("Signs people would pay: %s people" % pay["people"]))
+    buyers = opp.get("buyer_signals") or opp.get("pay_signals") or {}
+    if buyers.get("people"):
+        kinds = ", ".join("%s %s" % (n, BUYER_WORDING.get(k, k)) for k, n in (buyers.get("kinds") or {}).items())
+        blocks.append(_paragraph("Signs of a future buyer: %s people%s" % (buyers["people"], " (" + kinds + ")" if kinds else "")))
 
     for ev in (opp.get("evidence") or [])[:MAX_QUOTES_PER_IDEA]:
         blocks.append(_block(

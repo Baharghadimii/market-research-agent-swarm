@@ -393,3 +393,40 @@ def test_preview_says_how_many_comments_were_left_out(monkeypatch):
     assert p["comments"] == 3 and p["left_out"] == 2 and p["capped"] is True
     small = evidence.preview_pasted("reddit", "Just one comment about a real budgeting problem")
     assert small["left_out"] == 0 and small["capped"] is False
+
+
+
+def test_effort_counts_as_a_buyer_signal():
+    store = {
+        "E1": {"id": "E1", "text": "I keep a spreadsheet every month because no app works for this", "author": "a",
+               "platform": "App Store", "status": "unknown", "url": "https://x.test/1", "created": ""},
+        "E2": {"id": "E2", "text": "Tried four different apps and gave up on all of them last year", "author": "b",
+               "platform": "App Store", "status": "unknown", "url": "https://x.test/2", "created": ""},
+        "E3": {"id": "E3", "text": "This bug is annoying but not a big deal for me personally", "author": "c",
+               "platform": "App Store", "status": "unknown", "url": "https://x.test/3", "created": ""},
+    }
+    verified, _ = verify_extractions([
+        {"item_id": "E1", "quote": "I keep a spreadsheet every month", "kind": "workaround", "signal": "workaround"},
+        {"item_id": "E2", "quote": "Tried four different apps and gave up", "kind": "complaint", "signal": "tried_products"},
+        {"item_id": "E3", "quote": "This bug is annoying but not a big deal", "kind": "complaint", "signal": "bogus"},
+    ], store)
+    assert [verified[i]["signal"] for i in ("E1", "E2", "E3")] == ["workaround", "tried_products", "none"]
+    report = apply_evidence(report_with(["E1", "E2", "E3"]), verified)
+    bs = report["opportunities"][0]["buyer_signals"]
+    assert bs["people"] == 2 and bs["kinds"] == {"tried_products": 1, "workaround": 1}
+    assert report["opportunities"][0]["pay_signals"]["people"] == 0  # effort is not the same as paying
+
+
+def test_old_pay_field_still_counts():
+    store = {"E1": {"id": "E1", "text": "I pay twenty dollars a month and it still breaks", "author": "a",
+                    "platform": "App Store", "status": "unknown", "url": "https://x.test/1", "created": ""}}
+    verified, _ = verify_extractions([{"item_id": "E1", "quote": "I pay twenty dollars a month", "kind": "complaint",
+                                       "pay": "pays_now"}], store)
+    assert verified["E1"]["signal"] == "pays_now" and verified["E1"]["pay"] == "pays_now"
+
+
+
+def test_workaround_quotes_count_as_buyer_signals():
+    assert evidence._signal_of({"kind": "workaround"}) == "workaround"
+    assert evidence._signal_of({"kind": "workaround", "signal": "time_cost"}) == "time_cost"
+    assert evidence._signal_of({"kind": "complaint"}) == "none"

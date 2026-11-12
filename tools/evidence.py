@@ -60,6 +60,9 @@ NOT_SEARCHED = [
 
 EVIDENCE_KINDS = ("complaint", "wish", "workaround")
 PAY_KINDS = ("pays_now", "would_pay", "switched")
+# Signs someone could become a buyer. People rarely say "I'd pay" when nothing
+# exists to pay for, so effort already spent on the problem counts too.
+BUYER_SIGNALS = ("tried_products", "workaround", "time_cost") + PAY_KINDS
 
 # Sites with no approved API. A person can browse them and paste what they find.
 PASTED_SOURCES = {
@@ -764,6 +767,16 @@ def assign_ids(items_by_brief: dict) -> dict:
 
 # ── Verification and reporting ──────────────────────
 
+def _signal_of(entry: dict) -> str:
+    signal = entry.get("signal")
+    if signal in BUYER_SIGNALS:
+        return signal
+    if entry.get("pay") in PAY_KINDS:
+        return entry["pay"]
+    # A quote already classed as a workaround is effort spent on the problem.
+    return "workaround" if entry.get("kind") == "workaround" else "none"
+
+
 def verify_extractions(extractions: list, store: dict) -> tuple:
     """Keep only real, non-promotional quotes. Returns (verified, counts)."""
     verified, counts = {}, {"extracted": 0, "rejected_unverified": 0, "filtered_sellers": 0}
@@ -782,7 +795,8 @@ def verify_extractions(extractions: list, store: dict) -> tuple:
                 "quote": quote,
                 "kind": kind,
                 "theme": (entry.get("theme") or "").strip()[:80],
-                "pay": entry.get("pay") if entry.get("pay") in PAY_KINDS else "none",
+                "signal": _signal_of(entry),
+                "pay": _signal_of(entry) if _signal_of(entry) in PAY_KINDS else "none",
             }
     return verified, counts
 
@@ -821,6 +835,7 @@ def evidence_stats(ids: list, verified: dict) -> dict:
         "checked_level": checked_level if checked_people else "None",
         "checked_people": checked_people,
         "paying": len({person_key(r) for r in rows if r.get("pay", "none") != "none"}),
+        "buyers": len({person_key(r) for r in rows if r.get("signal", r.get("pay", "none")) != "none"}),
         "mentions": len(rows),
         "platforms": platforms,
         "open": sum(r["status"] == "open" for r in rows),
@@ -837,7 +852,7 @@ def _quotes_for_display(ids: list, verified: dict) -> list:
         (rest if key in seen else first).append(i)
         seen.add(key)
     return [
-        {k: verified[i].get(k, "") for k in ("id", "quote", "platform", "url", "created", "status", "kind", "theme", "pay")}
+        {k: verified[i].get(k, "") for k in ("id", "quote", "platform", "url", "created", "status", "kind", "theme", "pay", "signal")}
         for i in (first + rest)[:MAX_QUOTES_SHOWN]
     ]
 
@@ -871,6 +886,20 @@ def apply_evidence(report: dict, verified: dict) -> dict:
         stats = evidence_stats(ids, verified)
         opp["evidence_strength"] = stats
         opp["evidence"] = _quotes_for_display(ids, verified)
+        signal_ids = [i for i in ids if verified[i].get("signal", verified[i].get("pay", "none")) != "none"]
+        kinds = {}
+        for kind in BUYER_SIGNALS:
+            people = {person_key(verified[i]) for i in signal_ids if verified[i].get("signal") == kind}
+            if people:
+                kinds[kind] = len(people)
+        opp["buyer_signals"] = {
+            "people": stats["buyers"],
+            "kinds": kinds,
+            "quotes": [
+                {k: verified[i].get(k, "") for k in ("quote", "platform", "url", "created", "signal")}
+                for i in signal_ids[:4]
+            ],
+        }
         pay_ids = [i for i in ids if verified[i].get("pay", "none") != "none"]
         opp["pay_signals"] = {
             "people": stats["paying"],
@@ -959,7 +988,8 @@ def coverage_summary(connector_logs: list, store: dict, verified: dict, counts: 
         for entry in NOT_SEARCHED
     ]
     limits = (
-        "Comments show what hurts, not whether anyone will pay. "
+        "Comments show pain and the effort people spend on it. People rarely mention paying when nothing "
+        "exists to pay for, so silence about money is not a no; only asking people for money settles it. "
         "The same person on two platforms counts as two people."
     )
     if pasted:
@@ -974,6 +1004,7 @@ def coverage_summary(connector_logs: list, store: dict, verified: dict, counts: 
         "quotes_rejected": counts.get("rejected_unverified", 0),
         "sellers_filtered": counts.get("filtered_sellers", 0),
         "pay_quotes": sum(r.get("pay", "none") != "none" for r in verified.values()),
+        "buyer_quotes": sum(r.get("signal", r.get("pay", "none")) != "none" for r in verified.values()),
         "people": len({person_key(r) for r in verified.values()}),
         "connectors": connector_logs,
         "not_searched": not_searched,
